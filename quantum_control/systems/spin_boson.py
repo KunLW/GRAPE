@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from quantum_control.systems.closed_system import ClosedSystem
+from quantum_control.systems.closed_system import FluctuatingClosedSystem
 
 
 def annihilation_operator(n_levels):
@@ -29,16 +29,32 @@ def spin_phase_operator(phi_s):
     return np.cos(phi_s) * sx + np.sin(phi_s) * sy
 
 
-def spin_boson_control_system(n_levels, phi_s):
+def spin_boson_control_system(
+    n_levels,
+    phi_s,
+    static_fluctuations=(),
+    control_fluctuations=(),
+):
+    """Build the two-channel spin-boson Hamiltonian with optional fluctuations.
+
+    The nominal Hamiltonian is
+    ``alpha_1 I_spin ⊗ a†a + alpha_2 S_phi ⊗ (a + a†)``. Fluctuation terms use
+    the same long-correlation convention as the perturbative expansion path:
+    static matrices are already-scaled ``sigma_xi H_xi`` terms and control
+    fluctuation matrices are already-scaled ``sigma_chi_i H_chi_i`` terms.
+    """
+
     spin_identity = np.eye(2, dtype=complex)
     a = annihilation_operator(n_levels)
     adag = a.conj().T
     dimension = 2 * n_levels
 
-    return ClosedSystem(
+    return FluctuatingClosedSystem(
         drift=np.zeros((dimension, dimension), dtype=complex),
         controls=[
             np.kron(spin_identity, adag @ a),
             np.kron(spin_phase_operator(phi_s), a + adag),
         ],
+        static_fluctuations=static_fluctuations,
+        control_fluctuations=control_fluctuations,
     )

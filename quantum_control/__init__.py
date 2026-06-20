@@ -8,7 +8,7 @@ from quantum_control.pulses.parameterization import (
     endpoint_masked_parameterization,
 )
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
-from quantum_control.systems.closed_system import ClosedSystem
+from quantum_control.systems.closed_system import ClosedSystem, FluctuatingClosedSystem
 from quantum_control.systems.ion_trap_rf import IonTrapRFSystem
 from quantum_control.systems.spin_boson import (
     annihilation_operator,
@@ -32,6 +32,7 @@ from quantum_control.differentiators.expansion_differentiator import (
 
 __all__ = [
     "ClosedSystem",
+    "FluctuatingClosedSystem",
     "BoundedAmplitudeParameterization",
     "ControlProblem",
     "EvolutionContext",

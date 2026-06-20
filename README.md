@@ -75,8 +75,10 @@ gradient = problem.gradient()
 
 The spin-boson helper builds the Hamiltonian
 `H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) S_phi ⊗ (a + a†)`
-as a two-channel `ClosedSystem`. The pulse array has shape `(n_steps, 2)`;
-column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
+as a two-channel fluctuating closed system. The pulse array has shape
+`(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
+Optional `static_fluctuations` and `control_fluctuations` use the same
+already-scaled `sigma H` convention as `IonTrapRFSystem`.
 
 ```python
 import numpy as np

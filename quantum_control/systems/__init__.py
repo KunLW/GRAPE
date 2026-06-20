@@ -1,5 +1,5 @@
 from quantum_control.systems.base import ControlSystem
-from quantum_control.systems.closed_system import ClosedSystem
+from quantum_control.systems.closed_system import ClosedSystem, FluctuatingClosedSystem
 from quantum_control.systems.ion_trap_rf import IonTrapRFSystem
 from quantum_control.systems.spin_boson import (
     annihilation_operator,
@@ -12,6 +12,7 @@ from quantum_control.systems.spin_boson import (
 __all__ = [
     "ClosedSystem",
     "ControlSystem",
+    "FluctuatingClosedSystem",
     "IonTrapRFSystem",
     "annihilation_operator",
     "creation_operator",

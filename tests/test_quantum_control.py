@@ -15,6 +15,7 @@ from quantum_control import (
     StateTransferFidelity,
     UnitaryStepBuilder,
     annihilation_operator,
+    creation_operator,
     endpoint_masked_parameterization,
     number_operator,
     spin_boson_control_system,
@@ -95,6 +96,37 @@ def test_spin_boson_control_system_builds_two_control_hamiltonians():
     )
 
 
+def test_spin_boson_control_system_accepts_fluctuations():
+    n_levels = 3
+    phi_s = 0.2
+    static_fluctuation = 0.01 * np.eye(2 * n_levels, dtype=complex)
+    control_fluctuations = [
+        0.02 * np.kron(np.eye(2), number_operator(n_levels)),
+        0.03
+        * np.kron(
+            spin_phase_operator(phi_s),
+            annihilation_operator(n_levels) + creation_operator(n_levels),
+        ),
+    ]
+    controls = np.array([0.4, -0.2])
+    system = spin_boson_control_system(
+        n_levels=n_levels,
+        phi_s=phi_s,
+        static_fluctuations=[static_fluctuation],
+        control_fluctuations=control_fluctuations,
+    )
+
+    expected = (
+        static_fluctuation
+        + controls[0] * control_fluctuations[0]
+        + controls[1] * control_fluctuations[1]
+    )
+
+    assert np.allclose(system.fluctuation_hamiltonian(controls), expected)
+    assert np.allclose(system.fluctuation_control_derivative(0), control_fluctuations[0])
+    assert np.allclose(system.fluctuation_control_derivative(1), control_fluctuations[1])
+
+
 def test_spin_boson_problem_value_and_gradient_are_finite():
     n_levels = 2
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
@@ -124,6 +156,56 @@ def test_spin_boson_problem_value_and_gradient_are_finite():
         evolution=evolution,
         objective=objective,
         differentiator=differentiator,
+    )
+
+    value = problem.value()
+    gradient = problem.gradient()
+
+    assert isinstance(value, float)
+    assert np.isfinite(value)
+    assert gradient.shape == (3, 2)
+    assert np.all(np.isfinite(gradient))
+
+
+def test_spin_boson_fluctuation_expansion_value_and_gradient_are_finite():
+    n_levels = 2
+    system = spin_boson_control_system(
+        n_levels=n_levels,
+        phi_s=0.0,
+        static_fluctuations=[0.01 * np.eye(2 * n_levels, dtype=complex)],
+        control_fluctuations=[
+            0.02 * np.kron(np.eye(2), number_operator(n_levels)),
+            0.03
+            * np.kron(
+                spin_phase_operator(0.0),
+                annihilation_operator(n_levels) + creation_operator(n_levels),
+            ),
+        ],
+    )
+    pulse = PiecewiseConstantPulse(
+        np.array(
+            [
+                [0.2, 0.1],
+                [0.25, 0.15],
+                [0.2, 0.05],
+            ],
+            dtype=float,
+        ),
+        dt=0.05,
+    )
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
+        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+    )
+    step_builder = PerturbativeStepBuilder()
+    objective = ExpansionFidelity(max_order=2)
+    problem = ControlProblem(
+        system=system,
+        pulse=pulse,
+        context=context,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=objective,
+        differentiator=PerturbativeExpansionDifferentiator(step_builder, objective),
     )
 
     value = problem.value()
