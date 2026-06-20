@@ -1,0 +1,138 @@
+# GRAPE VERGE
+
+This repository contains a small modular quantum control engine. The important
+design choice is that fluctuation approximation is represented as perturbative
+expansion evolution, not as a single propagator.
+
+The data flow is:
+
+```text
+System + Pulse -> StepBuilder -> Evolution -> Objective -> Differentiator -> Optimizer
+```
+
+The implemented perturbative path returns expansion components such as
+`F`, `SF`, `DF`, and optional backward components, so higher-order extensions can
+be added without changing objective or optimizer code.
+
+## Quick Example
+
+```python
+import numpy as np
+
+from quantum_control import (
+    ControlProblem,
+    EvolutionContext,
+    ExpansionFidelity,
+    IonTrapRFSystem,
+    PerturbativeExpansionDifferentiator,
+    PerturbativeExpansionEvolution,
+    PerturbativeStepBuilder,
+    PiecewiseConstantPulse,
+)
+
+sx = np.array([[0, 1], [1, 0]], dtype=complex)
+sz = np.array([[1, 0], [0, -1]], dtype=complex)
+
+system = IonTrapRFSystem(
+    drift=np.zeros((2, 2), dtype=complex),
+    controls=[sx],
+    static_fluctuations=[0.01 * sz],
+    control_fluctuations=[0.02 * sx],
+)
+pulse = PiecewiseConstantPulse(np.full((20, 1), 0.1), dt=0.05)
+context = EvolutionContext(
+    initial_state=np.array([1, 0], dtype=complex),
+    target_state=np.array([0, 1], dtype=complex),
+)
+
+step_builder = PerturbativeStepBuilder()
+evolution = PerturbativeExpansionEvolution(step_builder, max_order=2)
+objective = ExpansionFidelity(max_order=2)
+differentiator = PerturbativeExpansionDifferentiator(step_builder, objective)
+
+problem = ControlProblem(
+    system=system,
+    pulse=pulse,
+    context=context,
+    evolution=evolution,
+    objective=objective,
+    differentiator=differentiator,
+)
+
+value = problem.value()
+gradient = problem.gradient()
+```
+
+## Spin-Boson Control Hamiltonian
+
+The spin-boson helper builds the Hamiltonian
+`H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) S_phi ⊗ (a + a†)`
+as a two-channel `ClosedSystem`. The pulse array has shape `(n_steps, 2)`;
+column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
+
+```python
+import numpy as np
+
+from quantum_control import (
+    ControlProblem,
+    EvolutionContext,
+    NominalUnitaryEvolution,
+    PiecewiseConstantPulse,
+    StateTransferFidelity,
+    UnitaryStepBuilder,
+    spin_boson_control_system,
+)
+from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+
+n_levels = 3
+system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+alpha = np.column_stack(
+    [
+        np.full(20, 0.2),  # alpha_1(t)
+        np.full(20, 0.1),  # alpha_2(t)
+    ]
+)
+pulse = PiecewiseConstantPulse(alpha, dt=0.05)
+context = EvolutionContext(
+    initial_state=np.eye(2 * n_levels, dtype=complex)[0],
+    target_state=np.eye(2 * n_levels, dtype=complex)[n_levels + 1],
+)
+
+step_builder = UnitaryStepBuilder()
+evolution = NominalUnitaryEvolution(step_builder)
+objective = StateTransferFidelity(context.target_state)
+differentiator = FiniteDifferenceDifferentiator(evolution, objective)
+
+problem = ControlProblem(
+    system=system,
+    pulse=pulse,
+    context=context,
+    evolution=evolution,
+    objective=objective,
+    differentiator=differentiator,
+)
+
+value = problem.value()
+gradient = problem.gradient()
+```
+
+## Pulse Slew-Rate Control
+
+Slew-rate control is not implemented as projection. A pulse that violates
+`max_delta` is left unchanged, and the restriction is handled either as a smooth
+penalty term or as explicit optimizer constraints.
+
+```python
+from quantum_control import ParameterizedControlProblem, PulseConstraints
+
+constraints = PulseConstraints.from_slew_rate(
+    dt=pulse.dt,
+    max_slew_rate=0.2,
+)
+parameterized_problem = ParameterizedControlProblem(
+    problem,
+    parameterization,
+    constraints=constraints,
+    penalty_weight=10.0,
+)
+```
