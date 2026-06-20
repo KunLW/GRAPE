@@ -16,6 +16,8 @@ from quantum_control.systems.spin_boson import (
     creation_operator,
     number_operator,
     spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
     spin_phase_operator,
 )
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
@@ -30,6 +32,7 @@ from quantum_control.objectives.expansion_fidelity import (
 from quantum_control.differentiators.expansion_differentiator import (
     PerturbativeExpansionDifferentiator,
 )
+from quantum_control.differentiators.grape import GrapeDifferentiator
 
 __all__ = [
     "ClosedSystem",
@@ -39,6 +42,7 @@ __all__ = [
     "EvolutionContext",
     "ExpansionFidelity",
     "ExpansionStateAverageFidelity",
+    "GrapeDifferentiator",
     "IonTrapRFSystem",
     "MaskedPulseParameterization",
     "NominalUnitaryEvolution",
@@ -57,5 +61,7 @@ __all__ = [
     "endpoint_masked_parameterization",
     "number_operator",
     "spin_boson_control_system",
+    "spin_boson_initial_pulse",
+    "spin_boson_parameterization",
     "spin_phase_operator",
 ]

@@ -104,7 +104,9 @@ The spin-boson helper builds the Hamiltonian
 as a two-channel fluctuating closed system. The pulse array has shape
 `(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
 Optional `static_fluctuations` and `control_fluctuations` use the same
-already-scaled `sigma H` convention as `IonTrapRFSystem`.
+already-scaled `sigma H` convention as `IonTrapRFSystem`. The pulse helper takes
+user-facing bounds in kHz and total time in microseconds, then stores amplitudes
+as angular frequencies in rad/s and `dt` in seconds.
 
 ```python
 import numpy as np
@@ -112,23 +114,20 @@ import numpy as np
 from quantum_control import (
     ControlProblem,
     EvolutionContext,
+    GrapeDifferentiator,
     NominalUnitaryEvolution,
-    PiecewiseConstantPulse,
+    ParameterizedControlProblem,
     StateTransferFidelity,
     UnitaryStepBuilder,
     spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
 )
-from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
 
 n_levels = 3
 system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
-alpha = np.column_stack(
-    [
-        np.full(20, 0.2),  # alpha_1(t)
-        np.full(20, 0.1),  # alpha_2(t)
-    ]
-)
-pulse = PiecewiseConstantPulse(alpha, dt=0.05)
+pulse = spin_boson_initial_pulse()
+parameterization = spin_boson_parameterization(pulse.n_steps)
 context = EvolutionContext(
     initial_state=np.eye(2 * n_levels, dtype=complex)[0],
     target_state=np.eye(2 * n_levels, dtype=complex)[n_levels + 1],
@@ -137,7 +136,7 @@ context = EvolutionContext(
 step_builder = UnitaryStepBuilder()
 evolution = NominalUnitaryEvolution(step_builder)
 objective = StateTransferFidelity(context.target_state)
-differentiator = FiniteDifferenceDifferentiator(evolution, objective)
+differentiator = GrapeDifferentiator(step_builder)
 
 problem = ControlProblem(
     system=system,
@@ -150,6 +149,9 @@ problem = ControlProblem(
 
 value = problem.value()
 gradient = problem.gradient()
+
+parameterized_problem = ParameterizedControlProblem(problem, parameterization)
+parameters = parameterized_problem.initial_parameters()
 ```
 
 ## Pulse Slew-Rate Control

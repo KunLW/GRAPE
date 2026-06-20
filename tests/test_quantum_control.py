@@ -5,6 +5,7 @@ from quantum_control import (
     EvolutionContext,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
+    GrapeDifferentiator,
     IonTrapRFSystem,
     NominalUnitaryEvolution,
     ParameterizedControlProblem,
@@ -21,6 +22,8 @@ from quantum_control import (
     endpoint_masked_parameterization,
     number_operator,
     spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
     spin_phase_operator,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
@@ -133,20 +136,46 @@ def test_spin_boson_control_system_accepts_fluctuations():
     assert np.allclose(system.fluctuation_control_derivative(1), control_fluctuations[1])
 
 
+def test_spin_boson_initial_pulse_uses_standard_units_and_half_period_shapes():
+    pulse = spin_boson_initial_pulse()
+    alpha1_lower = 2.0 * np.pi * 1000.0
+    alpha1_upper = 2.0 * np.pi * 600000.0
+    alpha2_upper = 2.0 * np.pi * 20000.0
+
+    assert pulse.amplitudes.shape == (200, 2)
+    assert np.allclose(pulse.dt, 225.8e-6 / 200)
+    assert np.all(pulse.amplitudes[:, 0] >= alpha1_lower)
+    assert np.all(pulse.amplitudes[:, 0] <= alpha1_upper)
+    assert np.all(np.diff(pulse.amplitudes[:, 0]) < 0.0)
+    assert np.all(pulse.amplitudes[:, 1] >= 0.0)
+    assert np.all(pulse.amplitudes[:, 1] <= alpha2_upper)
+    assert pulse.amplitudes[pulse.n_steps // 2 - 1, 1] > pulse.amplitudes[0, 1]
+    assert pulse.amplitudes[pulse.n_steps // 2 - 1, 1] > pulse.amplitudes[-1, 1]
+    assert np.allclose(pulse.amplitudes[0, 1], pulse.amplitudes[-1, 1])
+
+
+def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
+    pulse = spin_boson_initial_pulse(n_steps=5)
+    parameterization = spin_boson_parameterization(n_steps=pulse.n_steps)
+    parameters = parameterization.to_parameters(pulse.amplitudes)
+    reconstructed = parameterization.to_physical(parameters)
+
+    assert np.allclose(
+        parameterization.lower,
+        np.array([2.0 * np.pi * 1000.0, 0.0]),
+    )
+    assert np.allclose(
+        parameterization.upper,
+        np.array([2.0 * np.pi * 600000.0, 2.0 * np.pi * 20000.0]),
+    )
+    assert np.allclose(reconstructed, pulse.amplitudes)
+    assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10
+
+
 def test_spin_boson_problem_value_and_gradient_are_finite():
     n_levels = 2
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
-    pulse = PiecewiseConstantPulse(
-        np.array(
-            [
-                [0.2, 0.1],
-                [0.25, 0.15],
-                [0.2, 0.05],
-            ],
-            dtype=float,
-        ),
-        dt=0.05,
-    )
+    pulse = spin_boson_initial_pulse(n_steps=20)
     context = EvolutionContext(
         initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
         target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
@@ -154,7 +183,7 @@ def test_spin_boson_problem_value_and_gradient_are_finite():
     step_builder = UnitaryStepBuilder()
     evolution = NominalUnitaryEvolution(step_builder)
     objective = StateTransferFidelity(context.target_state)
-    differentiator = FiniteDifferenceDifferentiator(evolution, objective)
+    differentiator = GrapeDifferentiator(step_builder)
     problem = ControlProblem(
         system=system,
         pulse=pulse,
@@ -169,8 +198,89 @@ def test_spin_boson_problem_value_and_gradient_are_finite():
 
     assert isinstance(value, float)
     assert np.isfinite(value)
-    assert gradient.shape == (3, 2)
+    assert gradient.shape == pulse.amplitudes.shape
     assert np.all(np.isfinite(gradient))
+
+
+def test_spin_boson_parameterized_problem_uses_initial_pulse_helper():
+    n_levels = 2
+    pulse = spin_boson_initial_pulse(n_steps=10)
+    parameterization = spin_boson_parameterization(n_steps=pulse.n_steps)
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
+        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+    )
+    step_builder = UnitaryStepBuilder()
+    evolution = NominalUnitaryEvolution(step_builder)
+    objective = StateTransferFidelity(context.target_state)
+    problem = ControlProblem(
+        system=system,
+        pulse=pulse,
+        context=context,
+        evolution=evolution,
+        objective=objective,
+        differentiator=GrapeDifferentiator(step_builder),
+    )
+    parameterized_problem = ParameterizedControlProblem(problem, parameterization)
+    parameters = parameterized_problem.initial_parameters()
+
+    assert parameters.shape == pulse.amplitudes.shape
+    assert np.isfinite(parameterized_problem.value(parameters))
+    assert parameterized_problem.gradient(parameters).shape == pulse.amplitudes.shape
+
+
+def test_spin_boson_grape_gradient_matches_finite_difference_approximately():
+    n_levels = 2
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    pulse = PiecewiseConstantPulse(
+        np.array(
+            [
+                [0.02, 0.01],
+                [0.025, 0.015],
+                [0.02, 0.005],
+            ],
+            dtype=float,
+        ),
+        dt=0.005,
+    )
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
+        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+    )
+    step_builder = UnitaryStepBuilder()
+    evolution = NominalUnitaryEvolution(step_builder)
+    objective = StateTransferFidelity(context.target_state)
+    result = evolution.evolve(system, pulse, context)
+
+    analytic = GrapeDifferentiator(step_builder).gradient(system, pulse, context, result)
+    finite_difference = FiniteDifferenceDifferentiator(
+        evolution,
+        objective,
+        epsilon=1e-7,
+    ).gradient(system, pulse, context)
+
+    assert analytic.shape == pulse.amplitudes.shape
+    assert np.allclose(analytic, finite_difference, rtol=5e-2, atol=1e-8)
+
+
+def test_grape_gradient_requires_target_state():
+    n_levels = 2
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    pulse = PiecewiseConstantPulse(np.full((2, 2), 0.01), dt=0.005)
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
+        target_state=None,
+    )
+    step_builder = UnitaryStepBuilder()
+    result = NominalUnitaryEvolution(step_builder).evolve(system, pulse, context)
+
+    try:
+        GrapeDifferentiator(step_builder).gradient(system, pulse, context, result)
+    except ValueError as exc:
+        assert "target_state" in str(exc)
+    else:
+        raise AssertionError("Expected missing target_state to raise ValueError.")
 
 
 def test_spin_boson_fluctuation_expansion_value_and_gradient_are_finite():

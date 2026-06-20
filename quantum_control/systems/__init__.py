@@ -6,6 +6,8 @@ from quantum_control.systems.spin_boson import (
     creation_operator,
     number_operator,
     spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
     spin_phase_operator,
 )
 
@@ -18,5 +20,7 @@ __all__ = [
     "creation_operator",
     "number_operator",
     "spin_boson_control_system",
+    "spin_boson_initial_pulse",
+    "spin_boson_parameterization",
     "spin_phase_operator",
 ]
