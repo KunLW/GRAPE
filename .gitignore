@@ -40,3 +40,6 @@ Thumbs.db
 *.tmp
 *.swp
 *.swo
+
+# doc
+*.pdf
