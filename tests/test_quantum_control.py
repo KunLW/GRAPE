@@ -4,6 +4,7 @@ from quantum_control import (
     ControlProblem,
     EvolutionContext,
     ExpansionFidelity,
+    ExpansionStateAverageFidelity,
     IonTrapRFSystem,
     NominalUnitaryEvolution,
     ParameterizedControlProblem,
@@ -13,6 +14,7 @@ from quantum_control import (
     PiecewiseConstantPulse,
     PulseConstraints,
     StateTransferFidelity,
+    StatePair,
     UnitaryStepBuilder,
     annihilation_operator,
     creation_operator,
@@ -24,7 +26,7 @@ from quantum_control import (
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
 
 
-def two_level_problem(amplitudes):
+def two_level_problem(amplitudes, initial_state=None, target_state=None):
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
     system = IonTrapRFSystem(
@@ -35,8 +37,12 @@ def two_level_problem(amplitudes):
     )
     pulse = PiecewiseConstantPulse(np.asarray(amplitudes, dtype=float), dt=0.05)
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0], dtype=complex),
-        target_state=np.array([0.0, 1.0], dtype=complex),
+        initial_state=np.array([1.0, 0.0], dtype=complex)
+        if initial_state is None
+        else np.asarray(initial_state, dtype=complex),
+        target_state=np.array([0.0, 1.0], dtype=complex)
+        if target_state is None
+        else np.asarray(target_state, dtype=complex),
         compute_backward=True,
     )
     step_builder = PerturbativeStepBuilder()
@@ -267,6 +273,53 @@ def test_perturbative_gradient_matches_finite_difference_with_full_dv_derivative
 
     assert analytic.shape == amplitudes.shape
     assert np.allclose(analytic, finite_difference, rtol=2e-2, atol=2e-5)
+
+
+def test_state_average_fidelity_matches_single_state_problem_for_one_pair():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    problem = two_level_problem(amplitudes)
+    averaged = ExpansionStateAverageFidelity(
+        system=problem.system,
+        pulse=problem.pulse,
+        evolution=problem.evolution,
+        objective=problem.objective,
+        differentiator=problem.differentiator,
+        state_pairs=[
+            StatePair(
+                initial_state=problem.context.initial_state,
+                target_state=problem.context.target_state,
+            ),
+        ],
+    )
+
+    assert np.allclose(averaged.value(), problem.value())
+    assert np.allclose(averaged.gradient(), problem.gradient())
+
+
+def test_state_average_fidelity_uses_weighted_value_and_gradient_average():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    initial = np.array([1.0, 0.0], dtype=complex)
+    target_one = np.array([0.0, 1.0], dtype=complex)
+    target_zero = np.array([1.0, 0.0], dtype=complex)
+    problem_one = two_level_problem(amplitudes, initial_state=initial, target_state=target_one)
+    problem_zero = two_level_problem(amplitudes, initial_state=initial, target_state=target_zero)
+    averaged = ExpansionStateAverageFidelity(
+        system=problem_one.system,
+        pulse=problem_one.pulse,
+        evolution=problem_one.evolution,
+        objective=problem_one.objective,
+        differentiator=problem_one.differentiator,
+        state_pairs=[
+            (initial, target_one, 2.0),
+            (initial, target_zero, 1.0),
+        ],
+    )
+
+    expected_value = (2.0 * problem_one.value() + problem_zero.value()) / 3.0
+    expected_gradient = (2.0 * problem_one.gradient() + problem_zero.gradient()) / 3.0
+
+    assert np.allclose(averaged.value(), expected_value)
+    assert np.allclose(averaged.gradient(), expected_gradient)
 
 
 def test_expansion_fidelity_drops_odd_average_and_keeps_second_order_terms():

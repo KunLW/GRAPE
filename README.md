@@ -71,6 +71,32 @@ value = problem.value()
 gradient = problem.gradient()
 ```
 
+## Averaging Multiple State Pairs
+
+`ExpansionStateAverageFidelity` evaluates the same perturbative objective over
+multiple state pairs and returns the weighted average. This matches the
+state-pair averaging used by the open-gate fidelity notes while keeping each
+individual evolution as a single-state propagation.
+
+```python
+from quantum_control import ExpansionStateAverageFidelity
+
+averaged_problem = ExpansionStateAverageFidelity(
+    system=system,
+    pulse=pulse,
+    evolution=evolution,
+    objective=objective,
+    differentiator=differentiator,
+    state_pairs=[
+        (initial_state_0, target_state_0, 1.0),
+        (initial_state_1, target_state_1, 1.0),
+    ],
+)
+
+value = averaged_problem.value()
+gradient = averaged_problem.gradient()
+```
+
 ## Spin-Boson Control Hamiltonian
 
 The spin-boson helper builds the Hamiltonian

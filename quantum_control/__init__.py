@@ -1,6 +1,7 @@
 from quantum_control.context import EvolutionContext
 from quantum_control.parameterized_problem import ParameterizedControlProblem
 from quantum_control.problem import ControlProblem
+from quantum_control.state_average import ExpansionStateAverageFidelity, StatePair
 from quantum_control.pulses.constraints import PulseConstraints
 from quantum_control.pulses.parameterization import (
     BoundedAmplitudeParameterization,
@@ -37,6 +38,7 @@ __all__ = [
     "ControlProblem",
     "EvolutionContext",
     "ExpansionFidelity",
+    "ExpansionStateAverageFidelity",
     "IonTrapRFSystem",
     "MaskedPulseParameterization",
     "NominalUnitaryEvolution",
@@ -48,6 +50,7 @@ __all__ = [
     "PulseConstraints",
     "SecondOrderFluctuationFidelity",
     "StateTransferFidelity",
+    "StatePair",
     "UnitaryStepBuilder",
     "annihilation_operator",
     "creation_operator",
