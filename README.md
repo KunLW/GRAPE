@@ -14,6 +14,14 @@ The implemented perturbative path returns expansion components such as
 `F`, `SF`, `DF`, and optional backward components, so higher-order extensions can
 be added without changing objective or optimizer code.
 
+This perturbative path implements the long-time-correlation fluctuation limit
+from `doc/report_opengrape_iontrap.tex`. Static fluctuation matrices represent
+`sigma_xi H_xi`; control fluctuation matrices represent `sigma_chi_i H_chi_i`;
+the fluctuation Hamiltonian is
+`sum static_fluctuations + sum control_i * control_fluctuation_i`. The
+short-time-correlation decoherence limit belongs to the Lindblad/density-matrix
+path and is intentionally left as a future module.
+
 ## Quick Example
 
 ```python

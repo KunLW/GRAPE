@@ -6,6 +6,14 @@ from quantum_control.objectives.base import Objective
 
 
 class ExpansionFidelity(Objective):
+    """Fidelity for perturbative fluctuation components.
+
+    With ``max_order=2`` and ``drop_odd_average=True``, this keeps the closed
+    fidelity and the first non-vanishing long-correlation fluctuation
+    correction while dropping odd total orders whose zero-mean average
+    vanishes.
+    """
+
     def __init__(self, max_order=2, drop_odd_average=True):
         self.max_order = max_order
         self.drop_odd_average = drop_odd_average

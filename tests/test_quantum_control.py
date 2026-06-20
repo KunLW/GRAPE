@@ -146,6 +146,25 @@ def test_expansion_evolution_returns_ordered_components():
     assert result.forward[-1].components[0].shape == (2,)
 
 
+def test_ion_trap_fluctuation_hamiltonian_matches_noise_formula():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sy = np.array([[0, -1j], [1j, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = IonTrapRFSystem(
+        drift=np.zeros((2, 2), dtype=complex),
+        controls=[sx, sy],
+        static_fluctuations=[0.01 * sz, 0.02 * sx],
+        control_fluctuations=[0.03 * sx, 0.04 * sy],
+    )
+    controls = np.array([0.5, -0.25])
+
+    expected = 0.01 * sz + 0.02 * sx + controls[0] * 0.03 * sx + controls[1] * 0.04 * sy
+
+    assert np.allclose(system.fluctuation_hamiltonian(controls), expected)
+    assert np.allclose(system.fluctuation_control_derivative(0), 0.03 * sx)
+    assert np.allclose(system.fluctuation_control_derivative(1), 0.04 * sy)
+
+
 def test_problem_value_is_scalar():
     problem = two_level_problem(np.full((4, 1), 0.2))
     value = problem.value()
@@ -154,7 +173,7 @@ def test_problem_value_is_scalar():
     assert np.isfinite(value)
 
 
-def test_perturbative_gradient_matches_finite_difference_for_leading_approximation():
+def test_perturbative_gradient_matches_finite_difference_with_full_dv_derivative():
     amplitudes = np.array([[0.2], [0.25], [0.15]])
     problem = two_level_problem(amplitudes)
     analytic = problem.gradient()
@@ -166,6 +185,45 @@ def test_perturbative_gradient_matches_finite_difference_for_leading_approximati
 
     assert analytic.shape == amplitudes.shape
     assert np.allclose(analytic, finite_difference, rtol=2e-2, atol=2e-5)
+
+
+def test_expansion_fidelity_drops_odd_average_and_keeps_second_order_terms():
+    objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
+    amplitudes = {
+        0: 2.0 + 0.0j,
+        1: 3.0 + 0.0j,
+        2: 5.0 + 0.0j,
+    }
+
+    value = objective.contract(amplitudes)
+    no_average_drop = ExpansionFidelity(max_order=2, drop_odd_average=False).contract(amplitudes)
+
+    assert np.allclose(value, 33.0)
+    assert np.allclose(no_average_drop, 45.0)
+
+
+def test_zero_fluctuation_expansion_reduces_to_nominal_state_fidelity():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = IonTrapRFSystem(drift=0.1 * sz, controls=[sx])
+    pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0], dtype=complex),
+        target_state=np.array([0.0, 1.0], dtype=complex),
+    )
+
+    nominal_result = NominalUnitaryEvolution(UnitaryStepBuilder()).evolve(system, pulse, context)
+    expansion_result = PerturbativeExpansionEvolution(
+        PerturbativeStepBuilder(),
+        max_order=2,
+    ).evolve(system, pulse, context)
+
+    assert np.allclose(expansion_result.forward[-1].components[1], 0.0)
+    assert np.allclose(expansion_result.forward[-1].components[2], 0.0)
+    assert np.allclose(
+        ExpansionFidelity(max_order=2).evaluate(expansion_result),
+        StateTransferFidelity(context.target_state).evaluate(nominal_result),
+    )
 
 
 def test_endpoint_masked_parameterization_fixes_boundary_and_normalizes_free_points():
