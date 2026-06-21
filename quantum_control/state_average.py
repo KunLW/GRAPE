@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -15,6 +16,33 @@ class StatePair:
     weight: float = 1.0
 
 
+def _context_for_pair(pair, compute_backward):
+    return EvolutionContext(
+        initial_state=np.asarray(pair.initial_state, dtype=complex),
+        target_state=np.asarray(pair.target_state, dtype=complex),
+        compute_backward=compute_backward,
+    )
+
+
+def _weighted_value_chunk(args):
+    system, pulse, evolution, objective, compute_backward, weighted_pairs = args
+    value = 0.0
+    for weight, pair in weighted_pairs:
+        result = evolution.evolve(system, pulse, _context_for_pair(pair, compute_backward))
+        value = value + weight * objective.evaluate(result)
+    return value
+
+
+def _weighted_gradient_chunk(args):
+    system, pulse, evolution, differentiator, compute_backward, weighted_pairs = args
+    gradient = np.zeros_like(pulse.amplitudes)
+    for weight, pair in weighted_pairs:
+        context = _context_for_pair(pair, compute_backward)
+        result = evolution.evolve(system, pulse, context)
+        gradient = gradient + weight * differentiator.gradient(system, pulse, context, result)
+    return gradient
+
+
 class ExpansionStateAverageFidelity:
     """Average a perturbative fidelity objective over multiple state pairs."""
 
@@ -28,9 +56,12 @@ class ExpansionStateAverageFidelity:
         state_pairs: Sequence[StatePair | tuple],
         compute_backward=True,
         normalize_weights=True,
+        n_workers=1,
     ):
         if not state_pairs:
             raise ValueError("state_pairs must contain at least one pair.")
+        if n_workers < 1:
+            raise ValueError("n_workers must be at least 1.")
         self.system = system
         self.pulse = pulse
         self.evolution = evolution
@@ -39,10 +70,26 @@ class ExpansionStateAverageFidelity:
         self.state_pairs = tuple(self._coerce_pair(pair) for pair in state_pairs)
         self.compute_backward = compute_backward
         self.normalize_weights = normalize_weights
+        self.n_workers = int(n_workers)
+        self._executor = None
         self._weights = self._normalized_weights()
 
     def value(self, pulse=None):
         pulse = pulse or self.pulse
+        if self.n_workers > 1:
+            args = [
+                (
+                    self.system,
+                    pulse,
+                    self.evolution,
+                    self.objective,
+                    self.compute_backward,
+                    chunk,
+                )
+                for chunk in self._weighted_chunks()
+            ]
+            return float(np.sum(list(self._pool().map(_weighted_value_chunk, args))))
+
         value = 0.0
         for weight, pair in zip(self._weights, self.state_pairs):
             result = self.evolution.evolve(self.system, pulse, self._context(pair))
@@ -53,6 +100,20 @@ class ExpansionStateAverageFidelity:
         if self.differentiator is None:
             raise ValueError("A differentiator is required to compute gradients.")
         pulse = pulse or self.pulse
+        if self.n_workers > 1:
+            args = [
+                (
+                    self.system,
+                    pulse,
+                    self.evolution,
+                    self.differentiator,
+                    self.compute_backward,
+                    chunk,
+                )
+                for chunk in self._weighted_chunks()
+            ]
+            return np.sum(list(self._pool().map(_weighted_gradient_chunk, args)), axis=0)
+
         gradient = np.zeros_like(pulse.amplitudes)
         for weight, pair in zip(self._weights, self.state_pairs):
             context = self._context(pair)
@@ -64,6 +125,11 @@ class ExpansionStateAverageFidelity:
                 result,
             )
         return gradient
+
+    def shutdown(self):
+        if self._executor is not None:
+            self._executor.shutdown()
+            self._executor = None
 
     @staticmethod
     def _coerce_pair(pair):
@@ -89,8 +155,15 @@ class ExpansionStateAverageFidelity:
         return tuple(weights)
 
     def _context(self, pair):
-        return EvolutionContext(
-            initial_state=np.asarray(pair.initial_state, dtype=complex),
-            target_state=np.asarray(pair.target_state, dtype=complex),
-            compute_backward=self.compute_backward,
-        )
+        return _context_for_pair(pair, self.compute_backward)
+
+    def _weighted_chunks(self):
+        weighted_pairs = tuple(zip(self._weights, self.state_pairs))
+        n_chunks = min(self.n_workers, len(weighted_pairs))
+        chunks = np.array_split(np.asarray(weighted_pairs, dtype=object), n_chunks)
+        return [tuple(chunk) for chunk in chunks if len(chunk)]
+
+    def _pool(self):
+        if self._executor is None:
+            self._executor = ProcessPoolExecutor(max_workers=self.n_workers)
+        return self._executor
