@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from experiments.reporting import write_experiment_report
 from quantum_control import (
     ControlProblem,
     EvolutionContext,
@@ -257,10 +258,11 @@ def main():
         penalized_problem.parameter_shape,
     )
     initial_objective = penalized_problem.value(initial_parameters)
+    optimizer_options = {"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15}
     optimizer = ScipyOptimizer(
         method="L-BFGS-B",
         maximize=True,
-        options={"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15},
+        options=optimizer_options,
     )
     result = optimizer.optimize_parameters(
         penalized_problem,
@@ -332,18 +334,73 @@ def main():
         if not path.exists() or path.stat().st_size == 0:
             raise RuntimeError(f"Expected non-empty plot at {path}.")
 
-    print(f"initial_fidelity={initial_fidelity:.12g}")
-    print(f"final_fidelity={final_fidelity:.12g}")
-    print(f"initial_close_gate_fidelity={initial_close_gate_fidelity:.12g}")
-    print(f"final_close_gate_fidelity={final_close_gate_fidelity:.12g}")
-    print(f"initial_open_gate_fidelity={initial_open_gate_fidelity:.12g}")
-    print(f"final_open_gate_fidelity={final_open_gate_fidelity:.12g}")
-    print(f"initial_l1_penalty={initial_l1_penalty:.12g}")
-    print(f"final_l1_penalty={final_l1_penalty:.12g}")
-    print(f"initial_l2_penalty={initial_l2_penalty:.12g}")
-    print(f"final_l2_penalty={final_l2_penalty:.12g}")
-    print(f"initial_penalized_objective={initial_objective:.12g}")
-    print(f"final_penalized_objective={final_objective:.12g}")
+    metrics = {
+        "fidelity": (initial_fidelity, final_fidelity),
+        "close_gate_fidelity": (initial_close_gate_fidelity, final_close_gate_fidelity),
+        "open_gate_fidelity": (initial_open_gate_fidelity, final_open_gate_fidelity),
+        "l1_penalty": (initial_l1_penalty, final_l1_penalty),
+        "l2_penalty": (initial_l2_penalty, final_l2_penalty),
+        "penalized_objective": (initial_objective, final_objective),
+    }
+    bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
+    bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
+    report_path = write_experiment_report(
+        output_dir=OUTPUT_DIR,
+        experiment_slug="spin_boson_lbfgsb",
+        title="Spin-Boson L-BFGS-B Optimization",
+        configuration=[
+            ("objective", "state_transfer_fidelity"),
+            ("target_state", "(|00,0>-i|11,0>)/sqrt(2)"),
+            ("target_gate", "MS_XX(pi/2)"),
+            ("n_levels", N_LEVELS),
+            ("n_steps", initial_pulse.n_steps),
+            ("dt_s", initial_pulse.dt),
+            ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
+            ("phi_s", phi_s),
+            ("alpha1_cycles", args.alpha1_cycles),
+            ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
+            ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
+            ("alpha2_endpoint_constraint", "initial and final alpha2 fixed to 0"),
+            ("static_fluctuation_count", len(noisy_system.static_fluctuations)),
+            ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
+            ("l1_smooth_weight", args.l1_smooth_weight),
+            ("l2_smooth_weight", args.l2_smooth_weight),
+            ("optimizer_method", "L-BFGS-B"),
+            ("optimizer_maximize", True),
+            ("optimizer_options", optimizer_options),
+        ],
+        results=[
+            ("fidelity", *metrics["fidelity"]),
+            ("close_gate_fidelity", *metrics["close_gate_fidelity"]),
+            ("open_gate_fidelity", *metrics["open_gate_fidelity"]),
+            ("l1_penalty", *metrics["l1_penalty"]),
+            ("l2_penalty", *metrics["l2_penalty"]),
+            ("penalized_objective", *metrics["penalized_objective"]),
+        ],
+        optimizer=[
+            ("success", result.success),
+            ("message", result.message),
+            ("nit", getattr(result, "nit", "NA")),
+            ("nfev", getattr(result, "nfev", "NA")),
+        ],
+        figures=[
+            ("Pulse parameters", pulse_path),
+            ("State propagation", propagation_path),
+        ],
+    )
+
+    print(f"initial_fidelity={metrics['fidelity'][0]:.12g}")
+    print(f"final_fidelity={metrics['fidelity'][1]:.12g}")
+    print(f"initial_close_gate_fidelity={metrics['close_gate_fidelity'][0]:.12g}")
+    print(f"final_close_gate_fidelity={metrics['close_gate_fidelity'][1]:.12g}")
+    print(f"initial_open_gate_fidelity={metrics['open_gate_fidelity'][0]:.12g}")
+    print(f"final_open_gate_fidelity={metrics['open_gate_fidelity'][1]:.12g}")
+    print(f"initial_l1_penalty={metrics['l1_penalty'][0]:.12g}")
+    print(f"final_l1_penalty={metrics['l1_penalty'][1]:.12g}")
+    print(f"initial_l2_penalty={metrics['l2_penalty'][0]:.12g}")
+    print(f"final_l2_penalty={metrics['l2_penalty'][1]:.12g}")
+    print(f"initial_penalized_objective={metrics['penalized_objective'][0]:.12g}")
+    print(f"final_penalized_objective={metrics['penalized_objective'][1]:.12g}")
     print(f"l1_smooth_weight={args.l1_smooth_weight:.12g}")
     print(f"l2_smooth_weight={args.l2_smooth_weight:.12g}")
     print(f"alpha1_cycles={args.alpha1_cycles:.12g}")
@@ -354,6 +411,7 @@ def main():
     print(f"optimizer_nfev={getattr(result, 'nfev', 'NA')}")
     print(f"pulse_plot={pulse_path}")
     print(f"propagation_plot={propagation_path}")
+    print(f"markdown_report={report_path}")
 
 
 if __name__ == "__main__":
