@@ -56,6 +56,39 @@ def ms_bell_target_motion_ground(n_levels):
     return target
 
 
+class Alpha2EndpointZeroParameterization:
+    def __init__(self, base):
+        self.base = base
+
+    def to_physical(self, normalized):
+        amplitudes = self.base.to_physical(normalized)
+        amplitudes[[0, -1], 1] = 0.0
+        return amplitudes
+
+    def to_parameters(self, amplitudes):
+        parameters = self.base.to_parameters(amplitudes)
+        lower, upper = self.base._bounds_for(amplitudes.shape)
+        parameters[[0, -1], 1] = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
+        return parameters
+
+    def pullback_gradient(self, physical_gradient):
+        gradient = self.base.pullback_gradient(physical_gradient)
+        gradient[[0, -1], 1] = 0.0
+        return gradient
+
+    def parameter_bounds(self, shape):
+        bounds = self.base.parameter_bounds(shape)
+        lower, upper = self.base._bounds_for(shape)
+        endpoint_value = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
+        for row, value in zip((0, shape[0] - 1), endpoint_value):
+            bounds[np.ravel_multi_index((row, 1), shape)] = (float(value), float(value))
+        return bounds
+
+    @staticmethod
+    def _normalized_zero(lower, upper):
+        return (0.0 - 0.5 * (upper + lower)) / (0.5 * (upper - lower))
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run spin-boson L-BFGS-B experiment.")
     parser.add_argument("--maxiter", type=int, default=MAXITER)
@@ -153,7 +186,9 @@ def main():
     args = parse_args()
     system = spin_boson_control_system(n_levels=N_LEVELS, phi_s=0.0)
     initial_pulse = spin_boson_initial_pulse(alpha1_cycles=args.alpha1_cycles)
-    parameterization = spin_boson_parameterization(initial_pulse.n_steps)
+    parameterization = Alpha2EndpointZeroParameterization(
+        spin_boson_parameterization(initial_pulse.n_steps)
+    )
     dimension = 4 * N_LEVELS
     context = EvolutionContext(
         initial_state=basis_state(0, dimension),
@@ -210,8 +245,13 @@ def main():
     )
     final_objective = penalized_problem.value(final_parameters)
 
-    lower = np.broadcast_to(parameterization.lower, final_pulse.amplitudes.shape)
-    upper = np.broadcast_to(parameterization.upper, final_pulse.amplitudes.shape)
+    masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
+    if not np.allclose(masked_initial_pulse.amplitudes[[0, -1], 1], 0.0):
+        raise RuntimeError("Initial alpha2 endpoints are not masked to zero.")
+    if not np.allclose(final_pulse.amplitudes[[0, -1], 1], 0.0):
+        raise RuntimeError("Optimized alpha2 endpoints are not masked to zero.")
+
+    lower, upper = parameterization.base._bounds_for(final_pulse.amplitudes.shape)
     if np.any(final_pulse.amplitudes < lower) or np.any(final_pulse.amplitudes > upper):
         raise RuntimeError("Optimized pulse violates amplitude bounds.")
 
