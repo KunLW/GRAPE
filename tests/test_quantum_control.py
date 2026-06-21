@@ -153,8 +153,8 @@ def test_logical_gate_metric_states_are_normalized():
     single_states = single_qubit_logical_test_states()
     two_qubit_states = two_qubit_logical_test_states()
 
-    assert len(single_states) == 6
-    assert len(two_qubit_states) == 36
+    assert len(single_states) == 4
+    assert len(two_qubit_states) == 16
     assert all(np.allclose(np.vdot(state, state), 1.0) for state in single_states)
     assert all(np.allclose(np.vdot(state, state), 1.0) for state in two_qubit_states)
 
@@ -173,13 +173,13 @@ def test_motion_resolved_gate_state_pairs_use_spin_motion_ordering_and_weights()
     pairs = motion_resolved_gate_state_pairs(ms_xx_pi_over_2_gate(), n_levels)
     first_pair = pairs[0]
 
-    assert len(pairs) == 36 * n_levels
+    assert len(pairs) == 16 * n_levels
     assert np.allclose(sum(pair.weight for pair in pairs), n_levels)
     assert first_pair.initial_state.shape == (4 * n_levels,)
     assert first_pair.target_state.shape == (4 * n_levels,)
     assert np.allclose(first_pair.initial_state[0], 1.0)
     assert np.allclose(first_pair.initial_state[1:], 0.0)
-    assert np.allclose(first_pair.weight, 1.0 / 36.0)
+    assert np.allclose(first_pair.weight, 1.0 / 16.0)
 
 
 def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():

@@ -16,10 +16,8 @@ def single_qubit_logical_test_states():
     zero = np.array([1.0, 0.0], dtype=complex)
     one = np.array([0.0, 1.0], dtype=complex)
     plus = (zero + one) / np.sqrt(2.0)
-    minus = (zero - one) / np.sqrt(2.0)
     plus_i = (zero + 1j * one) / np.sqrt(2.0)
-    minus_i = (zero - 1j * one) / np.sqrt(2.0)
-    return (zero, one, plus, minus, plus_i, minus_i)
+    return (zero, one, plus, plus_i)
 
 
 def two_qubit_logical_test_states():
