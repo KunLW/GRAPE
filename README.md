@@ -155,6 +155,31 @@ parameterized_problem = ParameterizedControlProblem(problem, parameterization)
 parameters = parameterized_problem.initial_parameters()
 ```
 
+## Parameter Smooth Penalties
+
+Smooth penalties can be applied directly to normalized optimization parameters.
+Use separate weights for the L1 first-difference term and the L2
+second-difference term:
+
+```python
+from quantum_control import (
+    ParameterSmoothPenalty,
+    ParameterizedControlProblem,
+    PenalizedParameterizedProblem,
+)
+
+parameterized_problem = ParameterizedControlProblem(problem, parameterization)
+penalty = ParameterSmoothPenalty(
+    l1_weight=1e-3,
+    l2_weight=1e-4,
+)
+penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)
+```
+
+The L1 term is `sum(abs(diff(parameters)))`, and the L2 term is
+`sum(diff(parameters, n=2)**2)`. Both are evaluated in normalized parameter
+space, not in physical amplitude units.
+
 ## Pulse Slew-Rate Control
 
 Slew-rate control is not implemented as projection. A pulse that violates
