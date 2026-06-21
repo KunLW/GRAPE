@@ -1,5 +1,8 @@
+from datetime import datetime
+
 import numpy as np
 
+from experiments.reporting import timestamped_report_path, write_experiment_report
 from quantum_control import (
     ControlProblem,
     EvolutionContext,
@@ -36,6 +39,58 @@ from quantum_control import (
     two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+
+
+def test_timestamped_report_path_uses_safe_slug_and_markdown_extension(tmp_path):
+    generated_at = datetime(2026, 6, 21, 15, 30, 12)
+
+    report_path = timestamped_report_path(tmp_path, "spin boson/perturbative", generated_at)
+
+    assert report_path == tmp_path / "spin_boson_perturbative_20260621_153012.md"
+
+
+def test_write_experiment_report_includes_sections_and_relative_figures(tmp_path):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    pulse_plot = output_dir / "pulse.png"
+    propagation_plot = output_dir / "propagation.png"
+    pulse_plot.write_bytes(b"pulse")
+    propagation_plot.write_bytes(b"propagation")
+
+    report_path = write_experiment_report(
+        output_dir=output_dir,
+        experiment_slug="spin_boson",
+        title="Spin-Boson Test",
+        configuration=[
+            ("n_levels", 6),
+            ("optimizer_options", {"maxiter": 1, "gtol": 1e-12}),
+        ],
+        results=[
+            ("fidelity", 0.1, 0.25),
+        ],
+        optimizer=[
+            ("success", True),
+            ("message", "ok"),
+        ],
+        figures=[
+            ("Pulse parameters", pulse_plot),
+            ("State propagation", propagation_plot),
+        ],
+        generated_at=datetime(2026, 6, 21, 15, 30, 12),
+    )
+
+    markdown = report_path.read_text(encoding="utf-8")
+    assert report_path.name == "spin_boson_20260621_153012.md"
+    assert "# Spin-Boson Test" in markdown
+    assert "## Configuration" in markdown
+    assert "| n_levels | 6 |" in markdown
+    assert "## Results" in markdown
+    assert "| fidelity | 0.1 | 0.25 | 0.15 |" in markdown
+    assert "## Optimizer" in markdown
+    assert "| success | True |" in markdown
+    assert "## Figures" in markdown
+    assert "![Pulse parameters](pulse.png)" in markdown
+    assert "![State propagation](propagation.png)" in markdown
 
 
 def two_level_problem(amplitudes, initial_state=None, target_state=None):

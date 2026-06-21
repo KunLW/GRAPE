@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from experiments.reporting import write_experiment_report
 from quantum_control import (
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
@@ -410,6 +411,7 @@ def main():
         spin_boson_parameterization(initial_pulse.n_steps)
     )
     target_gate = ms_xx_pi_over_2_gate()
+    state_pairs = motion_resolved_gate_state_pairs(target_gate, N_LEVELS)
 
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
@@ -422,7 +424,7 @@ def main():
             step_builder,
             expansion_objective,
         ),
-        state_pairs=motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
+        state_pairs=state_pairs,
         normalize_weights=False,
         n_workers=args.workers,
     )
@@ -446,10 +448,11 @@ def main():
         penalized_problem.parameter_shape,
     )
 
+    optimizer_options = {"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15}
     optimizer = ScipyOptimizer(
         method="L-BFGS-B",
         maximize=True,
-        options={"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15},
+        options=optimizer_options,
     )
     progress = None if args.no_progress else OptimizationProgressBar(args.maxiter)
     if progress is not None:
@@ -565,7 +568,73 @@ def main():
         if not path.exists() or path.stat().st_size == 0:
             raise RuntimeError(f"Expected non-empty plot at {path}.")
 
+    bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
+    bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
+    report_path = write_experiment_report(
+        output_dir=OUTPUT_DIR,
+        experiment_slug="spin_boson_perturbative",
+        title="Spin-Boson Perturbative Open-Gate Optimization",
+        configuration=[
+            ("objective", "open_gate_fidelity_expansion"),
+            ("target_state", "(|00,0>-i|11,0>)/sqrt(2)"),
+            ("target_gate", "MS_XX(pi/2)"),
+            ("n_levels", N_LEVELS),
+            ("n_steps", args.n_steps),
+            ("dt_s", initial_pulse.dt),
+            ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
+            ("phi_s", phi_s),
+            ("alpha1_cycles", args.alpha1_cycles),
+            ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
+            ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
+            ("alpha2_endpoint_constraint", "initial and final alpha2 fixed to 0"),
+            ("static_fluctuation_count", len(noisy_system.static_fluctuations)),
+            ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
+            ("max_order", 2),
+            ("drop_odd_average", True),
+            ("workers", args.workers),
+            ("normalize_weights", False),
+            ("no_progress", args.no_progress),
+            ("state_pair_count", len(state_pairs)),
+            ("l1_smooth_weight", args.l1_smooth_weight),
+            ("l2_smooth_weight", args.l2_smooth_weight),
+            ("optimizer_method", "L-BFGS-B"),
+            ("optimizer_maximize", True),
+            ("optimizer_options", optimizer_options),
+        ],
+        results=[
+            ("single_state_fidelity", metrics["initial_fidelity"], metrics["final_fidelity"]),
+            (
+                "close_gate_fidelity",
+                metrics["initial_close_gate_fidelity"],
+                metrics["final_close_gate_fidelity"],
+            ),
+            (
+                "open_gate_fidelity",
+                metrics["initial_open_gate_fidelity"],
+                metrics["final_open_gate_fidelity"],
+            ),
+            ("l1_penalty", metrics["initial_l1_penalty"], metrics["final_l1_penalty"]),
+            ("l2_penalty", metrics["initial_l2_penalty"], metrics["final_l2_penalty"]),
+            (
+                "penalized_objective",
+                metrics["initial_penalized_objective"],
+                metrics["final_penalized_objective"],
+            ),
+        ],
+        optimizer=[
+            ("success", result.success),
+            ("message", result.message),
+            ("nit", getattr(result, "nit", "NA")),
+            ("nfev", getattr(result, "nfev", "NA")),
+        ],
+        figures=[
+            ("Pulse parameters", pulse_path),
+            ("State propagation", propagation_path),
+        ],
+    )
+
     print_experiment_report(args, result, metrics, pulse_path, propagation_path)
+    print(f"markdown_report={report_path}")
 
 
 if __name__ == "__main__":
