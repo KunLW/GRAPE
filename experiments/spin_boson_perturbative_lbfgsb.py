@@ -50,8 +50,8 @@ N_LEVELS = 6
 N_STEPS = 200
 MAXITER = 20
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
-DEFAULT_L1_SMOOTH_WEIGHT = 0.0
-DEFAULT_L2_SMOOTH_WEIGHT = 1e-4
+DEFAULT_L1_SMOOTH_WEIGHT = 0.1
+DEFAULT_L2_SMOOTH_WEIGHT = 1
 
 
 class OptimizationProgressBar:
@@ -171,6 +171,12 @@ def parse_args():
         default=DEFAULT_L2_SMOOTH_WEIGHT,
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker processes for perturbative state-pair averaging.",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable the optimization progress bar.",
@@ -188,7 +194,22 @@ def propagate_states(evolution, system, pulse, context):
     return np.asarray(states)
 
 
-def plot_pulses(time_us, initial_pulse, final_pulse, output_path):
+def add_experiment_note(fig, note):
+    if not note:
+        return
+    fig.text(
+        0.685,
+        0.785,
+        note,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        family="monospace",
+        bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.7},
+    )
+
+
+def plot_pulses(time_us, initial_pulse, final_pulse, output_path, note=None):
     initial_khz = initial_pulse.amplitudes / RAD_S_PER_KHZ
     final_khz = final_pulse.amplitudes / RAD_S_PER_KHZ
 
@@ -207,7 +228,8 @@ def plot_pulses(time_us, initial_pulse, final_pulse, output_path):
     axes[1].grid(True, alpha=0.3)
 
     fig.suptitle("Perturbative open-gate optimization: pulse parameters")
-    fig.tight_layout()
+    add_experiment_note(fig, note)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -218,6 +240,7 @@ def plot_population_marginals(
     final_states,
     n_levels,
     output_path,
+    note=None,
 ):
     initial_populations = np.abs(initial_states) ** 2
     final_populations = np.abs(final_states) ** 2
@@ -255,9 +278,123 @@ def plot_population_marginals(
     axes[0, 1].legend(state_handles, state_labels, loc="best")
     axes[1, 1].legend(motion_handles, motion_labels, loc="best", ncol=2)
     fig.suptitle("Nominal state propagation after perturbative optimization")
-    fig.tight_layout()
+    add_experiment_note(fig, note)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def format_experiment_note(args, result, metrics):
+    return "\n".join(
+        [
+            "objective=open_gate_fidelity_expansion, target=MS_XX(pi/2)",
+            (
+                f"n_steps={args.n_steps}, maxiter={args.maxiter}, "
+                f"workers={args.workers}, alpha1_cycles={args.alpha1_cycles:.6g}"
+            ),
+            (
+                f"smooth: l1={args.l1_smooth_weight:.6g}, "
+                f"l2={args.l2_smooth_weight:.6g}"
+            ),
+            (
+                f"open gate: {metrics['initial_open_gate_fidelity']:.6g} -> "
+                f"{metrics['final_open_gate_fidelity']:.6g}; "
+                f"close gate: {metrics['initial_close_gate_fidelity']:.6g} -> "
+                f"{metrics['final_close_gate_fidelity']:.6g}"
+            ),
+            (
+                f"objective: {metrics['initial_penalized_objective']:.6g} -> "
+                f"{metrics['final_penalized_objective']:.6g}; "
+                f"nit={getattr(result, 'nit', 'NA')}, nfev={getattr(result, 'nfev', 'NA')}"
+            ),
+        ]
+    )
+
+
+def print_section(title, rows):
+    print(f"\n[{title}]")
+    width = max(len(name) for name, _ in rows)
+    for name, value in rows:
+        print(f"{name:<{width}} : {value}")
+
+
+def format_value(value):
+    if isinstance(value, float):
+        return f"{value:.12g}"
+    return str(value)
+
+
+def print_experiment_report(args, result, metrics, pulse_path, propagation_path):
+    print("\n=== Perturbative Open-Gate Optimization ===")
+    print_section(
+        "Configuration",
+        [
+            ("objective", "open_gate_fidelity_expansion"),
+            ("target_gate", "MS_XX(pi/2)"),
+            ("n_levels", N_LEVELS),
+            ("n_steps", args.n_steps),
+            ("maxiter", args.maxiter),
+            ("workers", args.workers),
+            ("alpha1_cycles", format_value(args.alpha1_cycles)),
+            ("l1_smooth_weight", format_value(args.l1_smooth_weight)),
+            ("l2_smooth_weight", format_value(args.l2_smooth_weight)),
+        ],
+    )
+    print_section(
+        "Fidelity",
+        [
+            ("single_state", _transition(metrics["initial_fidelity"], metrics["final_fidelity"])),
+            (
+                "close_gate",
+                _transition(
+                    metrics["initial_close_gate_fidelity"],
+                    metrics["final_close_gate_fidelity"],
+                ),
+            ),
+            (
+                "open_gate",
+                _transition(
+                    metrics["initial_open_gate_fidelity"],
+                    metrics["final_open_gate_fidelity"],
+                ),
+            ),
+        ],
+    )
+    print_section(
+        "Objective And Penalty",
+        [
+            (
+                "penalized_objective",
+                _transition(
+                    metrics["initial_penalized_objective"],
+                    metrics["final_penalized_objective"],
+                ),
+            ),
+            ("l1_penalty", _transition(metrics["initial_l1_penalty"], metrics["final_l1_penalty"])),
+            ("l2_penalty", _transition(metrics["initial_l2_penalty"], metrics["final_l2_penalty"])),
+        ],
+    )
+    print_section(
+        "Optimizer",
+        [
+            ("success", result.success),
+            ("message", result.message),
+            ("nit", getattr(result, "nit", "NA")),
+            ("nfev", getattr(result, "nfev", "NA")),
+        ],
+    )
+    print_section(
+        "Outputs",
+        [
+            ("pulse_plot", pulse_path),
+            ("propagation_plot", propagation_path),
+        ],
+    )
+
+
+def _transition(initial, final):
+    delta = final - initial
+    return f"{initial:.12g} -> {final:.12g} (delta {delta:+.3g})"
 
 
 def main():
@@ -287,6 +424,7 @@ def main():
         ),
         state_pairs=motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
         normalize_weights=False,
+        n_workers=args.workers,
     )
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
@@ -316,12 +454,15 @@ def main():
     progress = None if args.no_progress else OptimizationProgressBar(args.maxiter)
     if progress is not None:
         progress.start()
-    result = optimizer.optimize_parameters(penalized_problem, callback=progress)
+    try:
+        result = optimizer.optimize_parameters(penalized_problem, callback=progress)
+        final_pulse = result.optimized_pulse
+        final_parameters = result.x.reshape(penalized_problem.parameter_shape)
+        final_objective = penalized_problem.value(final_parameters)
+    finally:
+        optimization_problem.shutdown()
     if progress is not None:
         progress.finish(result)
-    final_pulse = result.optimized_pulse
-    final_parameters = result.x.reshape(penalized_problem.parameter_shape)
-    final_objective = penalized_problem.value(final_parameters)
     final_l1_penalty = penalty.l1_value(
         final_parameters,
         penalized_problem.parameter_shape,
@@ -354,16 +495,21 @@ def main():
         masked_initial_pulse,
         target_gate,
         N_LEVELS,
+        n_workers=args.workers,
     )
     final_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         final_pulse,
         target_gate,
         N_LEVELS,
+        n_workers=args.workers,
     )
 
     lower, upper = parameterization.base._bounds_for(final_pulse.amplitudes.shape)
-    if np.any(final_pulse.amplitudes < lower) or np.any(final_pulse.amplitudes > upper):
+    bound_tolerance = 1e-8
+    if np.any(final_pulse.amplitudes < lower - bound_tolerance) or np.any(
+        final_pulse.amplitudes > upper + bound_tolerance
+    ):
         raise RuntimeError("Optimized pulse violates amplitude bounds.")
 
     dimension = 4 * N_LEVELS
@@ -389,43 +535,37 @@ def main():
     time_edges_us = np.arange(initial_pulse.n_steps + 1) * initial_pulse.dt * 1e6
     pulse_path = OUTPUT_DIR / "spin_boson_perturbative_pulses.png"
     propagation_path = OUTPUT_DIR / "spin_boson_perturbative_state_propagation.png"
-    plot_pulses(time_us, masked_initial_pulse, final_pulse, pulse_path)
+
+    metrics = {
+        "initial_fidelity": initial_single_state_fidelity,
+        "final_fidelity": final_single_state_fidelity,
+        "initial_close_gate_fidelity": initial_close_gate_fidelity,
+        "final_close_gate_fidelity": final_close_gate_fidelity,
+        "initial_open_gate_fidelity": initial_open_gate_fidelity,
+        "final_open_gate_fidelity": final_open_gate_fidelity,
+        "initial_l1_penalty": initial_l1_penalty,
+        "final_l1_penalty": final_l1_penalty,
+        "initial_l2_penalty": initial_l2_penalty,
+        "final_l2_penalty": final_l2_penalty,
+        "initial_penalized_objective": initial_objective,
+        "final_penalized_objective": final_objective,
+    }
+    experiment_note = format_experiment_note(args, result, metrics)
+    plot_pulses(time_us, masked_initial_pulse, final_pulse, pulse_path, note=experiment_note)
     plot_population_marginals(
         time_edges_us,
         initial_states,
         final_states,
         N_LEVELS,
         propagation_path,
+        note=experiment_note,
     )
 
     for path in (pulse_path, propagation_path):
         if not path.exists() or path.stat().st_size == 0:
             raise RuntimeError(f"Expected non-empty plot at {path}.")
 
-    print(f"initial_fidelity={initial_single_state_fidelity:.12g}")
-    print(f"final_fidelity={final_single_state_fidelity:.12g}")
-    print(f"initial_close_gate_fidelity={initial_close_gate_fidelity:.12g}")
-    print(f"final_close_gate_fidelity={final_close_gate_fidelity:.12g}")
-    print(f"initial_open_gate_fidelity={initial_open_gate_fidelity:.12g}")
-    print(f"final_open_gate_fidelity={final_open_gate_fidelity:.12g}")
-    print(f"initial_l1_penalty={initial_l1_penalty:.12g}")
-    print(f"final_l1_penalty={final_l1_penalty:.12g}")
-    print(f"initial_l2_penalty={initial_l2_penalty:.12g}")
-    print(f"final_l2_penalty={final_l2_penalty:.12g}")
-    print(f"initial_penalized_objective={initial_objective:.12g}")
-    print(f"final_penalized_objective={final_objective:.12g}")
-    print(f"l1_smooth_weight={args.l1_smooth_weight:.12g}")
-    print(f"l2_smooth_weight={args.l2_smooth_weight:.12g}")
-    print(f"alpha1_cycles={args.alpha1_cycles:.12g}")
-    print(f"n_steps={args.n_steps}")
-    print("target_gate=MS_XX(pi/2)")
-    print("optimization_objective=open_gate_fidelity_expansion")
-    print(f"optimizer_success={result.success}")
-    print(f"optimizer_message={result.message}")
-    print(f"optimizer_nit={getattr(result, 'nit', 'NA')}")
-    print(f"optimizer_nfev={getattr(result, 'nfev', 'NA')}")
-    print(f"pulse_plot={pulse_path}")
-    print(f"propagation_plot={propagation_path}")
+    print_experiment_report(args, result, metrics, pulse_path, propagation_path)
 
 
 if __name__ == "__main__":

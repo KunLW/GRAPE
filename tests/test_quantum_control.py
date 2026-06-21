@@ -586,6 +586,62 @@ def test_state_average_fidelity_uses_weighted_value_and_gradient_average():
     assert np.allclose(averaged.gradient(), expected_gradient)
 
 
+def test_state_average_fidelity_parallel_matches_serial_value_and_gradient():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    initial = np.array([1.0, 0.0], dtype=complex)
+    target_one = np.array([0.0, 1.0], dtype=complex)
+    target_zero = np.array([1.0, 0.0], dtype=complex)
+    problem = two_level_problem(amplitudes, initial_state=initial, target_state=target_one)
+    state_pairs = [
+        (initial, target_one, 2.0),
+        (initial, target_zero, 1.0),
+    ]
+    serial = ExpansionStateAverageFidelity(
+        system=problem.system,
+        pulse=problem.pulse,
+        evolution=problem.evolution,
+        objective=problem.objective,
+        differentiator=problem.differentiator,
+        state_pairs=state_pairs,
+    )
+    parallel = ExpansionStateAverageFidelity(
+        system=problem.system,
+        pulse=problem.pulse,
+        evolution=problem.evolution,
+        objective=problem.objective,
+        differentiator=problem.differentiator,
+        state_pairs=state_pairs,
+        n_workers=2,
+    )
+
+    try:
+        assert np.allclose(parallel.value(), serial.value())
+        assert np.allclose(parallel.gradient(), serial.gradient())
+    finally:
+        parallel.shutdown()
+
+
+def test_state_average_fidelity_requires_positive_worker_count():
+    problem = two_level_problem(np.array([[0.2], [0.25], [0.15]]))
+
+    try:
+        ExpansionStateAverageFidelity(
+            system=problem.system,
+            pulse=problem.pulse,
+            evolution=problem.evolution,
+            objective=problem.objective,
+            differentiator=problem.differentiator,
+            state_pairs=[
+                (problem.context.initial_state, problem.context.target_state),
+            ],
+            n_workers=0,
+        )
+    except ValueError as exc:
+        assert "n_workers" in str(exc)
+    else:
+        raise AssertionError("Expected n_workers=0 to raise ValueError.")
+
+
 def test_expansion_fidelity_drops_odd_average_and_keeps_second_order_terms():
     objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
     amplitudes = {

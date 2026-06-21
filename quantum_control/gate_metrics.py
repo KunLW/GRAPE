@@ -65,7 +65,7 @@ def closed_gate_fidelity(system, pulse, target_gate, n_levels):
     return float(np.sum(objective_values))
 
 
-def open_gate_fidelity(system, pulse, target_gate, n_levels):
+def open_gate_fidelity(system, pulse, target_gate, n_levels, n_workers=1):
     step_builder = PerturbativeStepBuilder()
     objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
     averaged = ExpansionStateAverageFidelity(
@@ -76,8 +76,12 @@ def open_gate_fidelity(system, pulse, target_gate, n_levels):
         differentiator=None,
         state_pairs=motion_resolved_gate_state_pairs(target_gate, n_levels),
         normalize_weights=False,
+        n_workers=n_workers,
     )
-    return averaged.value()
+    try:
+        return averaged.value()
+    finally:
+        averaged.shutdown()
 
 
 def _motion_basis(index, n_levels):
