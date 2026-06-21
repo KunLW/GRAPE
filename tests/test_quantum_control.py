@@ -20,14 +20,20 @@ from quantum_control import (
     StatePair,
     UnitaryStepBuilder,
     annihilation_operator,
+    closed_gate_fidelity,
     creation_operator,
     endpoint_masked_parameterization,
+    motion_resolved_gate_state_pairs,
+    ms_xx_pi_over_2_gate,
     number_operator,
+    open_gate_fidelity,
+    single_qubit_logical_test_states,
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
     two_qubit_spin_phase_difference,
+    two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
 
@@ -141,6 +147,54 @@ def test_spin_boson_control_system_accepts_fluctuations():
     assert np.allclose(system.fluctuation_hamiltonian(controls), expected)
     assert np.allclose(system.fluctuation_control_derivative(0), control_fluctuations[0])
     assert np.allclose(system.fluctuation_control_derivative(1), control_fluctuations[1])
+
+
+def test_logical_gate_metric_states_are_normalized():
+    single_states = single_qubit_logical_test_states()
+    two_qubit_states = two_qubit_logical_test_states()
+
+    assert len(single_states) == 6
+    assert len(two_qubit_states) == 36
+    assert all(np.allclose(np.vdot(state, state), 1.0) for state in single_states)
+    assert all(np.allclose(np.vdot(state, state), 1.0) for state in two_qubit_states)
+
+
+def test_ms_xx_pi_over_2_gate_matches_bell_target_convention():
+    gate = ms_xx_pi_over_2_gate()
+    zero_zero = np.array([1.0, 0.0, 0.0, 0.0], dtype=complex)
+    expected = np.array([1.0, 0.0, 0.0, -1j], dtype=complex) / np.sqrt(2.0)
+
+    assert np.allclose(gate.conj().T @ gate, np.eye(4))
+    assert np.allclose(gate @ zero_zero, expected)
+
+
+def test_motion_resolved_gate_state_pairs_use_spin_motion_ordering_and_weights():
+    n_levels = 3
+    pairs = motion_resolved_gate_state_pairs(ms_xx_pi_over_2_gate(), n_levels)
+    first_pair = pairs[0]
+
+    assert len(pairs) == 36 * n_levels
+    assert np.allclose(sum(pair.weight for pair in pairs), n_levels)
+    assert first_pair.initial_state.shape == (4 * n_levels,)
+    assert first_pair.target_state.shape == (4 * n_levels,)
+    assert np.allclose(first_pair.initial_state[0], 1.0)
+    assert np.allclose(first_pair.initial_state[1:], 0.0)
+    assert np.allclose(first_pair.weight, 1.0 / 36.0)
+
+
+def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
+    n_levels = 2
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    pulse = PiecewiseConstantPulse(
+        np.array([[0.02, 0.01], [0.025, 0.015]], dtype=float),
+        dt=0.005,
+    )
+    target_gate = ms_xx_pi_over_2_gate()
+
+    closed = closed_gate_fidelity(system, pulse, target_gate, n_levels)
+    opened = open_gate_fidelity(system, pulse, target_gate, n_levels)
+
+    assert np.allclose(opened, closed)
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():

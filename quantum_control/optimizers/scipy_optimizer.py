@@ -9,7 +9,7 @@ class ScipyOptimizer:
         self.maximize = maximize
         self.options = options or {}
 
-    def optimize(self, problem, initial_pulse=None, bounds=None, constraints=()):
+    def optimize(self, problem, initial_pulse=None, bounds=None, constraints=(), callback=None):
         try:
             from scipy.optimize import minimize
         except ModuleNotFoundError as exc:
@@ -36,12 +36,20 @@ class ScipyOptimizer:
             method=self.method,
             bounds=bounds,
             constraints=constraints,
+            callback=callback,
             options=self.options,
         )
         result.optimized_pulse = pulse.with_amplitudes(np.reshape(result.x, shape))
         return result
 
-    def optimize_parameters(self, problem, initial_parameters=None, bounds=None, constraints=()):
+    def optimize_parameters(
+        self,
+        problem,
+        initial_parameters=None,
+        bounds=None,
+        constraints=(),
+        callback=None,
+    ):
         try:
             from scipy.optimize import minimize
         except ModuleNotFoundError as exc:
@@ -70,6 +78,7 @@ class ScipyOptimizer:
             method=self.method,
             bounds=bounds,
             constraints=constraints,
+            callback=callback,
             options=self.options,
         )
         result.optimized_pulse = problem.pulse_from_parameters(result.x)
