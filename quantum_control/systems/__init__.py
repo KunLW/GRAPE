@@ -9,6 +9,7 @@ from quantum_control.systems.spin_boson import (
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
+    two_qubit_spin_phase_difference,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "spin_boson_initial_pulse",
     "spin_boson_parameterization",
     "spin_phase_operator",
+    "two_qubit_spin_phase_difference",
 ]

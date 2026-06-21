@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -34,12 +35,69 @@ from quantum_control.optimizers import ScipyOptimizer
 N_LEVELS = 6
 MAXITER = 50
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
+DEFAULT_SMOOTH_PENALTY_WEIGHT = 1e-4
 
 
 def basis_state(index, dimension):
     state = np.zeros(dimension, dtype=complex)
     state[index] = 1.0
     return state
+
+
+def ms_bell_target_motion_ground(n_levels):
+    dimension = 4 * n_levels
+    target = np.zeros(dimension, dtype=complex)
+    target[0] = 1.0 / np.sqrt(2.0)
+    target[3 * n_levels] = -1j / np.sqrt(2.0)
+    return target
+
+
+class SmoothPenaltyProblem:
+    def __init__(self, problem, weight):
+        self.problem = problem
+        self.pulse = problem.pulse
+        self.weight = float(weight)
+
+    def value(self, pulse=None):
+        pulse = pulse or self.pulse
+        return self.raw_fidelity(pulse) - self.weight * smooth_penalty(pulse)
+
+    def gradient(self, pulse=None):
+        pulse = pulse or self.pulse
+        return self.problem.gradient(pulse) - self.weight * smooth_penalty_gradient(pulse)
+
+    def raw_fidelity(self, pulse=None):
+        return self.problem.value(pulse or self.pulse)
+
+
+def smooth_penalty(pulse):
+    amplitudes_khz = pulse.amplitudes / RAD_S_PER_KHZ
+    second_difference = np.diff(amplitudes_khz, n=2, axis=0)
+    return float(np.sum(second_difference**2))
+
+
+def smooth_penalty_gradient(pulse):
+    amplitudes_khz = pulse.amplitudes / RAD_S_PER_KHZ
+    if amplitudes_khz.shape[0] < 3:
+        return np.zeros_like(pulse.amplitudes)
+    second_difference = np.diff(amplitudes_khz, n=2, axis=0)
+    gradient_khz = np.zeros_like(amplitudes_khz)
+    gradient_khz[:-2] += 2.0 * second_difference
+    gradient_khz[1:-1] -= 4.0 * second_difference
+    gradient_khz[2:] += 2.0 * second_difference
+    return gradient_khz / RAD_S_PER_KHZ
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run spin-boson L-BFGS-B experiment.")
+    parser.add_argument("--maxiter", type=int, default=MAXITER)
+    parser.add_argument("--alpha1-cycles", type=float, default=1.0)
+    parser.add_argument(
+        "--smooth-penalty-weight",
+        type=float,
+        default=DEFAULT_SMOOTH_PENALTY_WEIGHT,
+    )
+    return parser.parse_args()
 
 
 def pulse_bounds(pulse, parameterization):
@@ -82,42 +140,57 @@ def plot_pulses(time_us, initial_pulse, final_pulse, output_path):
     plt.close(fig)
 
 
-def plot_state_propagation(time_edges_us, initial_states, final_states, output_path):
+def plot_population_marginals(time_edges_us, initial_states, final_states, output_path):
     initial_populations = np.abs(initial_states) ** 2
     final_populations = np.abs(final_states) ** 2
+    initial_joint = initial_populations.reshape((-1, 4, N_LEVELS))
+    final_joint = final_populations.reshape((-1, 4, N_LEVELS))
+    initial_spin = initial_joint.sum(axis=2)
+    final_spin = final_joint.sum(axis=2)
+    initial_motion = initial_joint.sum(axis=1)
+    final_motion = final_joint.sum(axis=1)
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True, sharey=True)
-    for basis_index in range(2 * N_LEVELS):
-        spin = basis_index // N_LEVELS
-        level = basis_index % N_LEVELS
-        label = f"|{spin},{level}>"
-        axes[0].plot(time_edges_us, initial_populations[:, basis_index], label=label)
-        axes[1].plot(time_edges_us, final_populations[:, basis_index], label=label)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True, sharey="row")
+    spin_labels = ["00", "01", "10", "11"]
+    for spin_index, label in enumerate(spin_labels):
+        axes[0, 0].plot(time_edges_us, initial_spin[:, spin_index], label=f"|{label}>")
+        axes[0, 1].plot(time_edges_us, final_spin[:, spin_index], label=f"|{label}>")
+    for level in range(N_LEVELS):
+        axes[1, 0].plot(time_edges_us, initial_motion[:, level], label=f"n={level}")
+        axes[1, 1].plot(time_edges_us, final_motion[:, level], label=f"n={level}")
 
-    axes[0].set_title("Initial pulse")
-    axes[1].set_title("Optimized pulse")
-    axes[1].set_xlabel("time (us)")
+    axes[0, 0].set_title("Two-qubit spin population, initial pulse")
+    axes[0, 1].set_title("Two-qubit spin population, optimized pulse")
+    axes[1, 0].set_title("Motion population, initial pulse")
+    axes[1, 1].set_title("Motion population, optimized pulse")
+    axes[1, 0].set_xlabel("time (us)")
+    axes[1, 1].set_xlabel("time (us)")
     for axis in axes:
-        axis.set_ylabel("population")
-        axis.grid(True, alpha=0.3)
-        axis.set_ylim(-0.02, 1.02)
+        for item in axis:
+            item.grid(True, alpha=0.3)
+            item.set_ylim(-0.02, 1.02)
+    axes[0, 0].set_ylabel("spin population")
+    axes[1, 0].set_ylabel("motion population")
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="center right", ncol=1, fontsize="small")
-    fig.suptitle("State propagation")
-    fig.tight_layout(rect=(0, 0, 0.88, 1))
+    state_handles, state_labels = axes[0, 0].get_legend_handles_labels()
+    motion_handles, motion_labels = axes[1, 0].get_legend_handles_labels()
+    axes[0, 1].legend(state_handles, state_labels, loc="best")
+    axes[1, 1].legend(motion_handles, motion_labels, loc="best", ncol=2)
+    fig.suptitle("State propagation: two-qubit spin and motion marginals")
+    fig.tight_layout()
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
 
 def main():
+    args = parse_args()
     system = spin_boson_control_system(n_levels=N_LEVELS, phi_s=0.0)
-    initial_pulse = spin_boson_initial_pulse()
+    initial_pulse = spin_boson_initial_pulse(alpha1_cycles=args.alpha1_cycles)
     parameterization = spin_boson_parameterization(initial_pulse.n_steps)
-    dimension = 2 * N_LEVELS
+    dimension = 4 * N_LEVELS
     context = EvolutionContext(
         initial_state=basis_state(0, dimension),
-        target_state=basis_state(N_LEVELS + 1, dimension),
+        target_state=ms_bell_target_motion_ground(N_LEVELS),
     )
     step_builder = UnitaryStepBuilder()
     evolution = NominalUnitaryEvolution(step_builder)
@@ -132,18 +205,23 @@ def main():
         differentiator=differentiator,
     )
 
+    penalized_problem = SmoothPenaltyProblem(problem, weight=args.smooth_penalty_weight)
     initial_fidelity = problem.value()
+    initial_penalty = smooth_penalty(initial_pulse)
+    initial_objective = penalized_problem.value()
     optimizer = ScipyOptimizer(
         method="L-BFGS-B",
         maximize=True,
-        options={"maxiter": MAXITER, "gtol": 1e-12, "ftol": 1e-15},
+        options={"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15},
     )
     result = optimizer.optimize(
-        problem,
+        penalized_problem,
         bounds=pulse_bounds(initial_pulse, parameterization),
     )
     final_pulse = result.optimized_pulse
     final_fidelity = problem.value(final_pulse)
+    final_penalty = smooth_penalty(final_pulse)
+    final_objective = penalized_problem.value(final_pulse)
 
     lower = np.broadcast_to(parameterization.lower, final_pulse.amplitudes.shape)
     upper = np.broadcast_to(parameterization.upper, final_pulse.amplitudes.shape)
@@ -162,7 +240,7 @@ def main():
     pulse_path = OUTPUT_DIR / "spin_boson_pulses.png"
     propagation_path = OUTPUT_DIR / "spin_boson_state_propagation.png"
     plot_pulses(time_us, initial_pulse, final_pulse, pulse_path)
-    plot_state_propagation(time_edges_us, initial_states, final_states, propagation_path)
+    plot_population_marginals(time_edges_us, initial_states, final_states, propagation_path)
 
     for path in (pulse_path, propagation_path):
         if not path.exists() or path.stat().st_size == 0:
@@ -170,6 +248,13 @@ def main():
 
     print(f"initial_fidelity={initial_fidelity:.12g}")
     print(f"final_fidelity={final_fidelity:.12g}")
+    print(f"initial_smooth_penalty={initial_penalty:.12g}")
+    print(f"final_smooth_penalty={final_penalty:.12g}")
+    print(f"initial_penalized_objective={initial_objective:.12g}")
+    print(f"final_penalized_objective={final_objective:.12g}")
+    print(f"smooth_penalty_weight={args.smooth_penalty_weight:.12g}")
+    print(f"alpha1_cycles={args.alpha1_cycles:.12g}")
+    print("target_state=(|00,0>-i|11,0>)/sqrt(2)")
     print(f"optimizer_success={result.success}")
     print(f"optimizer_message={result.message}")
     print(f"optimizer_nit={getattr(result, 'nit', 'NA')}")

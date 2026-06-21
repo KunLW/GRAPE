@@ -25,8 +25,10 @@ from quantum_control import (
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
+    two_qubit_spin_phase_difference,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+from experiments.spin_boson_lbfgsb import smooth_penalty, smooth_penalty_gradient
 
 
 def two_level_problem(amplitudes, initial_state=None, target_state=None):
@@ -81,6 +83,10 @@ def test_spin_boson_operators_use_truncated_oscillator_conventions():
     assert np.allclose(np.diag(number_operator(4)), np.arange(4))
     assert np.allclose(spin_phase_operator(0.0), sx)
     assert np.allclose(spin_phase_operator(np.pi / 2.0), sy)
+    assert np.allclose(
+        two_qubit_spin_phase_difference(0.0),
+        np.kron(sx, np.eye(2)) - np.kron(np.eye(2), sx),
+    )
 
 
 def test_spin_boson_control_system_builds_two_control_hamiltonians():
@@ -92,13 +98,13 @@ def test_spin_boson_control_system_builds_two_control_hamiltonians():
     a = annihilation_operator(n_levels)
     adag = a.conj().T
     expected_hamiltonian = (
-        alpha_1 * np.kron(np.eye(2), adag @ a)
-        + alpha_2 * np.kron(spin_phase_operator(phi_s), a + adag)
+        alpha_1 * np.kron(np.eye(4), adag @ a)
+        + alpha_2 * np.kron(two_qubit_spin_phase_difference(phi_s), a + adag)
     )
 
-    assert system.drift.shape == (6, 6)
-    assert system.controls[0].shape == (6, 6)
-    assert system.controls[1].shape == (6, 6)
+    assert system.drift.shape == (12, 12)
+    assert system.controls[0].shape == (12, 12)
+    assert system.controls[1].shape == (12, 12)
     assert np.allclose(
         system.nominal_hamiltonian([alpha_1, alpha_2]),
         expected_hamiltonian,
@@ -108,12 +114,12 @@ def test_spin_boson_control_system_builds_two_control_hamiltonians():
 def test_spin_boson_control_system_accepts_fluctuations():
     n_levels = 3
     phi_s = 0.2
-    static_fluctuation = 0.01 * np.eye(2 * n_levels, dtype=complex)
+    static_fluctuation = 0.01 * np.eye(4 * n_levels, dtype=complex)
     control_fluctuations = [
-        0.02 * np.kron(np.eye(2), number_operator(n_levels)),
+        0.02 * np.kron(np.eye(4), number_operator(n_levels)),
         0.03
         * np.kron(
-            spin_phase_operator(phi_s),
+            two_qubit_spin_phase_difference(phi_s),
             annihilation_operator(n_levels) + creation_operator(n_levels),
         ),
     ]
@@ -136,22 +142,32 @@ def test_spin_boson_control_system_accepts_fluctuations():
     assert np.allclose(system.fluctuation_control_derivative(1), control_fluctuations[1])
 
 
-def test_spin_boson_initial_pulse_uses_standard_units_and_half_period_shapes():
+def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
     pulse = spin_boson_initial_pulse()
     alpha1_lower = 2.0 * np.pi * 1000.0
     alpha1_upper = 2.0 * np.pi * 600000.0
     alpha2_upper = 2.0 * np.pi * 20000.0
+    alpha1 = pulse.amplitudes[:, 0]
+    alpha2 = pulse.amplitudes[:, 1]
 
     assert pulse.amplitudes.shape == (200, 2)
     assert np.allclose(pulse.dt, 225.8e-6 / 200)
-    assert np.all(pulse.amplitudes[:, 0] >= alpha1_lower)
-    assert np.all(pulse.amplitudes[:, 0] <= alpha1_upper)
+    assert np.all(alpha1 >= alpha1_lower)
+    assert np.all(alpha1 <= alpha1_upper)
+    assert alpha1[0] > alpha1[pulse.n_steps // 2]
+    assert alpha1[-1] > alpha1[pulse.n_steps // 2]
+    assert np.allclose(alpha1[0], alpha1[-1])
+    assert np.all(alpha2 >= 0.0)
+    assert np.all(alpha2 <= alpha2_upper)
+    assert alpha2[pulse.n_steps // 2 - 1] > alpha2[0]
+    assert alpha2[pulse.n_steps // 2 - 1] > alpha2[-1]
+    assert np.allclose(alpha2[0], alpha2[-1])
+
+
+def test_spin_boson_initial_pulse_allows_half_alpha1_cycle():
+    pulse = spin_boson_initial_pulse(alpha1_cycles=0.5)
+
     assert np.all(np.diff(pulse.amplitudes[:, 0]) < 0.0)
-    assert np.all(pulse.amplitudes[:, 1] >= 0.0)
-    assert np.all(pulse.amplitudes[:, 1] <= alpha2_upper)
-    assert pulse.amplitudes[pulse.n_steps // 2 - 1, 1] > pulse.amplitudes[0, 1]
-    assert pulse.amplitudes[pulse.n_steps // 2 - 1, 1] > pulse.amplitudes[-1, 1]
-    assert np.allclose(pulse.amplitudes[0, 1], pulse.amplitudes[-1, 1])
 
 
 def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
@@ -172,13 +188,72 @@ def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
     assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10
 
 
+def test_smooth_penalty_is_zero_for_linear_pulse_and_positive_for_curved_pulse():
+    linear_pulse = PiecewiseConstantPulse(
+        np.column_stack(
+            [
+                np.linspace(1.0, 5.0, 6),
+                np.linspace(2.0, 4.0, 6),
+            ]
+        ),
+        dt=1.0,
+    )
+    curved_pulse = PiecewiseConstantPulse(
+        np.array(
+            [
+                [1.0, 1.0],
+                [3.0, 1.0],
+                [2.0, 4.0],
+                [6.0, 2.0],
+                [4.0, 5.0],
+            ],
+            dtype=float,
+        ),
+        dt=1.0,
+    )
+
+    assert np.allclose(smooth_penalty(linear_pulse), 0.0)
+    assert smooth_penalty(curved_pulse) > 0.0
+
+
+def test_smooth_penalty_gradient_matches_finite_difference():
+    pulse = PiecewiseConstantPulse(
+        np.array(
+            [
+                [1.0, 1.0],
+                [3.0, 1.0],
+                [2.0, 4.0],
+                [6.0, 2.0],
+                [4.0, 5.0],
+            ],
+            dtype=float,
+        ),
+        dt=1.0,
+    )
+    gradient = smooth_penalty_gradient(pulse)
+    epsilon = 1e-6
+    finite_difference = np.zeros_like(pulse.amplitudes)
+
+    for index in np.ndindex(pulse.amplitudes.shape):
+        plus = np.array(pulse.amplitudes, copy=True)
+        minus = np.array(pulse.amplitudes, copy=True)
+        plus[index] += epsilon
+        minus[index] -= epsilon
+        finite_difference[index] = (
+            smooth_penalty(pulse.with_amplitudes(plus))
+            - smooth_penalty(pulse.with_amplitudes(minus))
+        ) / (2.0 * epsilon)
+
+    assert np.allclose(gradient, finite_difference, rtol=1e-5, atol=1e-10)
+
+
 def test_spin_boson_problem_value_and_gradient_are_finite():
     n_levels = 2
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
     pulse = spin_boson_initial_pulse(n_steps=20)
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
-        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+        initial_state=np.eye(4 * n_levels, dtype=complex)[0],
+        target_state=np.eye(4 * n_levels, dtype=complex)[3 * n_levels + 1],
     )
     step_builder = UnitaryStepBuilder()
     evolution = NominalUnitaryEvolution(step_builder)
@@ -208,8 +283,8 @@ def test_spin_boson_parameterized_problem_uses_initial_pulse_helper():
     parameterization = spin_boson_parameterization(n_steps=pulse.n_steps)
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
-        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+        initial_state=np.eye(4 * n_levels, dtype=complex)[0],
+        target_state=np.eye(4 * n_levels, dtype=complex)[3 * n_levels + 1],
     )
     step_builder = UnitaryStepBuilder()
     evolution = NominalUnitaryEvolution(step_builder)
@@ -245,8 +320,8 @@ def test_spin_boson_grape_gradient_matches_finite_difference_approximately():
         dt=0.005,
     )
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
-        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+        initial_state=np.eye(4 * n_levels, dtype=complex)[0],
+        target_state=np.eye(4 * n_levels, dtype=complex)[3 * n_levels + 1],
     )
     step_builder = UnitaryStepBuilder()
     evolution = NominalUnitaryEvolution(step_builder)
@@ -269,7 +344,7 @@ def test_grape_gradient_requires_target_state():
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
     pulse = PiecewiseConstantPulse(np.full((2, 2), 0.01), dt=0.005)
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
+        initial_state=np.eye(4 * n_levels, dtype=complex)[0],
         target_state=None,
     )
     step_builder = UnitaryStepBuilder()
@@ -288,12 +363,12 @@ def test_spin_boson_fluctuation_expansion_value_and_gradient_are_finite():
     system = spin_boson_control_system(
         n_levels=n_levels,
         phi_s=0.0,
-        static_fluctuations=[0.01 * np.eye(2 * n_levels, dtype=complex)],
+        static_fluctuations=[0.01 * np.eye(4 * n_levels, dtype=complex)],
         control_fluctuations=[
-            0.02 * np.kron(np.eye(2), number_operator(n_levels)),
+            0.02 * np.kron(np.eye(4), number_operator(n_levels)),
             0.03
             * np.kron(
-                spin_phase_operator(0.0),
+                two_qubit_spin_phase_difference(0.0),
                 annihilation_operator(n_levels) + creation_operator(n_levels),
             ),
         ],
@@ -310,8 +385,8 @@ def test_spin_boson_fluctuation_expansion_value_and_gradient_are_finite():
         dt=0.05,
     )
     context = EvolutionContext(
-        initial_state=np.array([1.0, 0.0, 0.0, 0.0], dtype=complex),
-        target_state=np.array([0.0, 0.0, 0.0, 1.0], dtype=complex),
+        initial_state=np.eye(4 * n_levels, dtype=complex)[0],
+        target_state=np.eye(4 * n_levels, dtype=complex)[3 * n_levels + 1],
     )
     step_builder = PerturbativeStepBuilder()
     objective = ExpansionFidelity(max_order=2)

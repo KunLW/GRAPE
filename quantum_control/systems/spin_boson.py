@@ -31,6 +31,12 @@ def spin_phase_operator(phi_s):
     return np.cos(phi_s) * sx + np.sin(phi_s) * sy
 
 
+def two_qubit_spin_phase_difference(phi_s):
+    single_spin = spin_phase_operator(phi_s)
+    identity = np.eye(2, dtype=complex)
+    return np.kron(single_spin, identity) - np.kron(identity, single_spin)
+
+
 def spin_boson_control_system(
     n_levels,
     phi_s,
@@ -40,22 +46,23 @@ def spin_boson_control_system(
     """Build the two-channel spin-boson Hamiltonian with optional fluctuations.
 
     The nominal Hamiltonian is
-    ``alpha_1 I_spin ⊗ a†a + alpha_2 S_phi ⊗ (a + a†)``. Fluctuation terms use
+    ``alpha_1 I_spin ⊗ a†a + alpha_2 S_phi ⊗ (a + a†)`` with two-qubit
+    ``S_phi = sigma_phi ⊗ I - I ⊗ sigma_phi``. Fluctuation terms use
     the same long-correlation convention as the perturbative expansion path:
     static matrices are already-scaled ``sigma_xi H_xi`` terms and control
     fluctuation matrices are already-scaled ``sigma_chi_i H_chi_i`` terms.
     """
 
-    spin_identity = np.eye(2, dtype=complex)
+    spin_identity = np.eye(4, dtype=complex)
     a = annihilation_operator(n_levels)
     adag = a.conj().T
-    dimension = 2 * n_levels
+    dimension = 4 * n_levels
 
     return FluctuatingClosedSystem(
         drift=np.zeros((dimension, dimension), dtype=complex),
         controls=[
             np.kron(spin_identity, adag @ a),
-            np.kron(spin_phase_operator(phi_s), a + adag),
+            np.kron(two_qubit_spin_phase_difference(phi_s), a + adag),
         ],
         static_fluctuations=static_fluctuations,
         control_fluctuations=control_fluctuations,
@@ -67,22 +74,29 @@ def spin_boson_initial_pulse(
     total_time_us=225.8,
     alpha1_khz_bounds=(1.0, 600.0),
     alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_cycles=1.0,
 ):
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1.")
     total_time = float(total_time_us) * 1e-6
     if total_time <= 0.0:
         raise ValueError("total_time_us must be positive.")
+    if alpha1_cycles <= 0.0:
+        raise ValueError("alpha1_cycles must be positive.")
 
     alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
     alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
     dt = total_time / n_steps
-    phase = np.pi * (np.arange(n_steps, dtype=float) + 0.5) / n_steps
+    normalized_time = (np.arange(n_steps, dtype=float) + 0.5) / n_steps
 
     alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
     alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1 = alpha1_center + alpha1_scale * np.cos(phase)
-    alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(phase)
+    alpha1 = alpha1_center + alpha1_scale * np.cos(
+        2.0 * np.pi * alpha1_cycles * normalized_time
+    )
+    alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(
+        np.pi * normalized_time
+    )
 
     return PiecewiseConstantPulse(
         amplitudes=np.column_stack([alpha1, alpha2]),

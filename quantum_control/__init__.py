@@ -19,6 +19,7 @@ from quantum_control.systems.spin_boson import (
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
+    two_qubit_spin_phase_difference,
 )
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
@@ -64,4 +65,5 @@ __all__ = [
     "spin_boson_initial_pulse",
     "spin_boson_parameterization",
     "spin_phase_operator",
+    "two_qubit_spin_phase_difference",
 ]

@@ -101,8 +101,9 @@ gradient = averaged_problem.gradient()
 
 The spin-boson helper builds the Hamiltonian
 `H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) S_phi ⊗ (a + a†)`
-as a two-channel fluctuating closed system. The pulse array has shape
-`(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
+as a two-channel fluctuating closed system with two spin qubits. The spin term is
+`S_phi = sigma_phi ⊗ I - I ⊗ sigma_phi`. The pulse array has shape `(n_steps, 2)`;
+column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
 Optional `static_fluctuations` and `control_fluctuations` use the same
 already-scaled `sigma H` convention as `IonTrapRFSystem`. The pulse helper takes
 user-facing bounds in kHz and total time in microseconds, then stores amplitudes
@@ -129,8 +130,8 @@ system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
 pulse = spin_boson_initial_pulse()
 parameterization = spin_boson_parameterization(pulse.n_steps)
 context = EvolutionContext(
-    initial_state=np.eye(2 * n_levels, dtype=complex)[0],
-    target_state=np.eye(2 * n_levels, dtype=complex)[n_levels + 1],
+    initial_state=np.eye(4 * n_levels, dtype=complex)[0],
+    target_state=np.eye(4 * n_levels, dtype=complex)[3 * n_levels + 1],
 )
 
 step_builder = UnitaryStepBuilder()
