@@ -1,4 +1,12 @@
 from quantum_control.context import EvolutionContext
+from quantum_control.gate_metrics import (
+    closed_gate_fidelity,
+    motion_resolved_gate_state_pairs,
+    ms_xx_pi_over_2_gate,
+    open_gate_fidelity,
+    single_qubit_logical_test_states,
+    two_qubit_logical_test_states,
+)
 from quantum_control.parameterized_problem import ParameterizedControlProblem
 from quantum_control.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
 from quantum_control.problem import ControlProblem
@@ -62,11 +70,17 @@ __all__ = [
     "UnitaryStepBuilder",
     "annihilation_operator",
     "creation_operator",
+    "closed_gate_fidelity",
     "endpoint_masked_parameterization",
+    "motion_resolved_gate_state_pairs",
+    "ms_xx_pi_over_2_gate",
     "number_operator",
+    "open_gate_fidelity",
+    "single_qubit_logical_test_states",
     "spin_boson_control_system",
     "spin_boson_initial_pulse",
     "spin_boson_parameterization",
     "spin_phase_operator",
     "two_qubit_spin_phase_difference",
+    "two_qubit_logical_test_states",
 ]
