@@ -40,4 +40,7 @@ class ParameterizedControlProblem:
         return self.parameterization.pullback_gradient(physical_gradient)
 
     def parameter_bounds(self):
-        return self.parameterization.parameter_bounds()
+        try:
+            return self.parameterization.parameter_bounds()
+        except TypeError:
+            return self.parameterization.parameter_bounds(self.initial_parameters().shape)

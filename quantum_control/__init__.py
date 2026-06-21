@@ -1,5 +1,6 @@
 from quantum_control.context import EvolutionContext
 from quantum_control.parameterized_problem import ParameterizedControlProblem
+from quantum_control.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
 from quantum_control.problem import ControlProblem
 from quantum_control.state_average import ExpansionStateAverageFidelity, StatePair
 from quantum_control.pulses.constraints import PulseConstraints
@@ -48,6 +49,8 @@ __all__ = [
     "MaskedPulseParameterization",
     "NominalUnitaryEvolution",
     "ParameterizedControlProblem",
+    "ParameterSmoothPenalty",
+    "PenalizedParameterizedProblem",
     "PerturbativeExpansionDifferentiator",
     "PerturbativeExpansionEvolution",
     "PerturbativeStepBuilder",

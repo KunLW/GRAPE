@@ -8,7 +8,9 @@ from quantum_control import (
     GrapeDifferentiator,
     IonTrapRFSystem,
     NominalUnitaryEvolution,
+    ParameterSmoothPenalty,
     ParameterizedControlProblem,
+    PenalizedParameterizedProblem,
     PerturbativeExpansionDifferentiator,
     PerturbativeExpansionEvolution,
     PerturbativeStepBuilder,
@@ -28,7 +30,6 @@ from quantum_control import (
     two_qubit_spin_phase_difference,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
-from experiments.spin_boson_lbfgsb import smooth_penalty, smooth_penalty_gradient
 
 
 def two_level_problem(amplitudes, initial_state=None, target_state=None):
@@ -188,60 +189,83 @@ def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
     assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10
 
 
-def test_smooth_penalty_is_zero_for_linear_pulse_and_positive_for_curved_pulse():
-    linear_pulse = PiecewiseConstantPulse(
-        np.column_stack(
-            [
-                np.linspace(1.0, 5.0, 6),
-                np.linspace(2.0, 4.0, 6),
-            ]
-        ),
-        dt=1.0,
+def test_parameter_smooth_penalty_handles_constant_linear_and_curved_parameters():
+    penalty = ParameterSmoothPenalty(l1_weight=2.0, l2_weight=3.0)
+    constant_parameters = np.ones((5, 2))
+    linear_parameters = np.column_stack(
+        [
+            np.linspace(1.0, 5.0, 6),
+            np.linspace(2.0, 4.0, 6),
+        ]
     )
-    curved_pulse = PiecewiseConstantPulse(
-        np.array(
-            [
-                [1.0, 1.0],
-                [3.0, 1.0],
-                [2.0, 4.0],
-                [6.0, 2.0],
-                [4.0, 5.0],
-            ],
-            dtype=float,
-        ),
-        dt=1.0,
+    curved_parameters = np.array(
+        [
+            [1.0, 1.0],
+            [3.0, 1.0],
+            [2.0, 4.0],
+            [6.0, 2.0],
+            [4.0, 5.0],
+        ],
+        dtype=float,
     )
 
-    assert np.allclose(smooth_penalty(linear_pulse), 0.0)
-    assert smooth_penalty(curved_pulse) > 0.0
+    assert np.allclose(penalty.value(constant_parameters, constant_parameters.shape), 0.0)
+    assert penalty.l1_value(linear_parameters, linear_parameters.shape) > 0.0
+    assert np.allclose(penalty.l2_value(linear_parameters, linear_parameters.shape), 0.0)
+    assert penalty.l1_value(curved_parameters, curved_parameters.shape) > 0.0
+    assert penalty.l2_value(curved_parameters, curved_parameters.shape) > 0.0
 
 
-def test_smooth_penalty_gradient_matches_finite_difference():
-    pulse = PiecewiseConstantPulse(
-        np.array(
-            [
-                [1.0, 1.0],
-                [3.0, 1.0],
-                [2.0, 4.0],
-                [6.0, 2.0],
-                [4.0, 5.0],
-            ],
-            dtype=float,
-        ),
-        dt=1.0,
+def test_parameter_smooth_l1_gradient_matches_finite_difference():
+    penalty = ParameterSmoothPenalty(l1_weight=1.7)
+    parameters = np.array(
+        [
+            [0.0, 0.3],
+            [0.2, 0.1],
+            [0.5, -0.2],
+            [0.9, -0.6],
+        ],
+        dtype=float,
     )
-    gradient = smooth_penalty_gradient(pulse)
+    gradient = penalty.gradient(parameters, parameters.shape)
     epsilon = 1e-6
-    finite_difference = np.zeros_like(pulse.amplitudes)
+    finite_difference = np.zeros_like(parameters)
 
-    for index in np.ndindex(pulse.amplitudes.shape):
-        plus = np.array(pulse.amplitudes, copy=True)
-        minus = np.array(pulse.amplitudes, copy=True)
+    for index in np.ndindex(parameters.shape):
+        plus = np.array(parameters, copy=True)
+        minus = np.array(parameters, copy=True)
         plus[index] += epsilon
         minus[index] -= epsilon
         finite_difference[index] = (
-            smooth_penalty(pulse.with_amplitudes(plus))
-            - smooth_penalty(pulse.with_amplitudes(minus))
+            penalty.value(plus, parameters.shape) - penalty.value(minus, parameters.shape)
+        ) / (2.0 * epsilon)
+
+    assert np.allclose(gradient, finite_difference, rtol=1e-5, atol=1e-9)
+
+
+def test_parameter_smooth_l2_gradient_matches_finite_difference():
+    penalty = ParameterSmoothPenalty(l2_weight=2.5)
+    parameters = np.array(
+        [
+            [1.0, 1.0],
+            [3.0, 1.0],
+            [2.0, 4.0],
+            [6.0, 2.0],
+            [4.0, 5.0],
+        ],
+        dtype=float,
+    )
+    gradient = penalty.gradient(parameters, parameters.shape)
+    epsilon = 1e-6
+    finite_difference = np.zeros_like(parameters)
+
+    for index in np.ndindex(parameters.shape):
+        plus = np.array(parameters, copy=True)
+        minus = np.array(parameters, copy=True)
+        plus[index] += epsilon
+        minus[index] -= epsilon
+        finite_difference[index] = (
+            penalty.value(plus, parameters.shape) - penalty.value(minus, parameters.shape)
         ) / (2.0 * epsilon)
 
     assert np.allclose(gradient, finite_difference, rtol=1e-5, atol=1e-10)
@@ -303,6 +327,7 @@ def test_spin_boson_parameterized_problem_uses_initial_pulse_helper():
     assert parameters.shape == pulse.amplitudes.shape
     assert np.isfinite(parameterized_problem.value(parameters))
     assert parameterized_problem.gradient(parameters).shape == pulse.amplitudes.shape
+    assert parameterized_problem.parameter_bounds() == [(-1.0, 1.0)] * pulse.amplitudes.size
 
 
 def test_spin_boson_grape_gradient_matches_finite_difference_approximately():
@@ -581,6 +606,41 @@ def test_parameterized_problem_pulls_gradient_back_to_free_normalized_parameters
     assert parameters.shape == (2,)
     assert parameter_gradient.shape == (2,)
     assert np.allclose(parameter_gradient, physical_gradient[1:-1, 0])
+
+
+def test_penalized_parameterized_problem_subtracts_parameter_space_penalty():
+    physical_amplitudes = np.array([[0.0], [0.2], [0.25], [0.0]])
+    problem = two_level_problem(physical_amplitudes)
+    parameterization = endpoint_masked_parameterization(
+        n_steps=4,
+        n_controls=1,
+        lower=-1.0,
+        upper=1.0,
+    )
+    parameterized_problem = ParameterizedControlProblem(problem, parameterization)
+    penalty = ParameterSmoothPenalty(l1_weight=0.5, l2_weight=0.25)
+    penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)
+    parameters = parameterized_problem.initial_parameters()
+
+    assert np.allclose(
+        penalized_problem.value(parameters),
+        parameterized_problem.value(parameters)
+        - penalty.value(parameters, penalized_problem.parameter_shape),
+    )
+    assert np.allclose(
+        penalized_problem.gradient(parameters),
+        parameterized_problem.gradient(parameters)
+        - penalty.gradient(parameters, penalized_problem.parameter_shape),
+    )
+    assert penalized_problem.gradient(parameters).shape == parameters.shape
+    assert np.allclose(
+        penalized_problem.pulse_from_parameters(parameters).amplitudes,
+        physical_amplitudes,
+    )
+    assert np.allclose(
+        penalized_problem.pulse_from_parameters(parameters.reshape(-1)).amplitudes,
+        physical_amplitudes,
+    )
 
 
 def test_pulse_constraints_penalize_slew_rate_without_projection():

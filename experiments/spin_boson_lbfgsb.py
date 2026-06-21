@@ -23,6 +23,9 @@ from quantum_control import (
     EvolutionContext,
     GrapeDifferentiator,
     NominalUnitaryEvolution,
+    ParameterSmoothPenalty,
+    ParameterizedControlProblem,
+    PenalizedParameterizedProblem,
     StateTransferFidelity,
     UnitaryStepBuilder,
     spin_boson_control_system,
@@ -35,7 +38,8 @@ from quantum_control.optimizers import ScipyOptimizer
 N_LEVELS = 6
 MAXITER = 50
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
-DEFAULT_SMOOTH_PENALTY_WEIGHT = 1e-4
+DEFAULT_L1_SMOOTH_WEIGHT = 0.0
+DEFAULT_L2_SMOOTH_WEIGHT = 1e-4
 
 
 def basis_state(index, dimension):
@@ -52,58 +56,21 @@ def ms_bell_target_motion_ground(n_levels):
     return target
 
 
-class SmoothPenaltyProblem:
-    def __init__(self, problem, weight):
-        self.problem = problem
-        self.pulse = problem.pulse
-        self.weight = float(weight)
-
-    def value(self, pulse=None):
-        pulse = pulse or self.pulse
-        return self.raw_fidelity(pulse) - self.weight * smooth_penalty(pulse)
-
-    def gradient(self, pulse=None):
-        pulse = pulse or self.pulse
-        return self.problem.gradient(pulse) - self.weight * smooth_penalty_gradient(pulse)
-
-    def raw_fidelity(self, pulse=None):
-        return self.problem.value(pulse or self.pulse)
-
-
-def smooth_penalty(pulse):
-    amplitudes_khz = pulse.amplitudes / RAD_S_PER_KHZ
-    second_difference = np.diff(amplitudes_khz, n=2, axis=0)
-    return float(np.sum(second_difference**2))
-
-
-def smooth_penalty_gradient(pulse):
-    amplitudes_khz = pulse.amplitudes / RAD_S_PER_KHZ
-    if amplitudes_khz.shape[0] < 3:
-        return np.zeros_like(pulse.amplitudes)
-    second_difference = np.diff(amplitudes_khz, n=2, axis=0)
-    gradient_khz = np.zeros_like(amplitudes_khz)
-    gradient_khz[:-2] += 2.0 * second_difference
-    gradient_khz[1:-1] -= 4.0 * second_difference
-    gradient_khz[2:] += 2.0 * second_difference
-    return gradient_khz / RAD_S_PER_KHZ
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Run spin-boson L-BFGS-B experiment.")
     parser.add_argument("--maxiter", type=int, default=MAXITER)
     parser.add_argument("--alpha1-cycles", type=float, default=1.0)
     parser.add_argument(
-        "--smooth-penalty-weight",
+        "--l1-smooth-weight",
         type=float,
-        default=DEFAULT_SMOOTH_PENALTY_WEIGHT,
+        default=DEFAULT_L1_SMOOTH_WEIGHT,
+    )
+    parser.add_argument(
+        "--l2-smooth-weight",
+        type=float,
+        default=DEFAULT_L2_SMOOTH_WEIGHT,
     )
     return parser.parse_args()
-
-
-def pulse_bounds(pulse, parameterization):
-    lower = np.broadcast_to(parameterization.lower, pulse.amplitudes.shape)
-    upper = np.broadcast_to(parameterization.upper, pulse.amplitudes.shape)
-    return list(zip(lower.reshape(-1), upper.reshape(-1), strict=True))
 
 
 def propagate_states(evolution, system, pulse, context):
@@ -205,23 +172,43 @@ def main():
         differentiator=differentiator,
     )
 
-    penalized_problem = SmoothPenaltyProblem(problem, weight=args.smooth_penalty_weight)
+    parameterized_problem = ParameterizedControlProblem(problem, parameterization)
+    penalty = ParameterSmoothPenalty(
+        l1_weight=args.l1_smooth_weight,
+        l2_weight=args.l2_smooth_weight,
+    )
+    penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)
+    initial_parameters = penalized_problem.initial_parameters()
     initial_fidelity = problem.value()
-    initial_penalty = smooth_penalty(initial_pulse)
-    initial_objective = penalized_problem.value()
+    initial_l1_penalty = penalty.l1_value(
+        initial_parameters,
+        penalized_problem.parameter_shape,
+    )
+    initial_l2_penalty = penalty.l2_value(
+        initial_parameters,
+        penalized_problem.parameter_shape,
+    )
+    initial_objective = penalized_problem.value(initial_parameters)
     optimizer = ScipyOptimizer(
         method="L-BFGS-B",
         maximize=True,
         options={"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15},
     )
-    result = optimizer.optimize(
+    result = optimizer.optimize_parameters(
         penalized_problem,
-        bounds=pulse_bounds(initial_pulse, parameterization),
     )
     final_pulse = result.optimized_pulse
+    final_parameters = result.x.reshape(penalized_problem.parameter_shape)
     final_fidelity = problem.value(final_pulse)
-    final_penalty = smooth_penalty(final_pulse)
-    final_objective = penalized_problem.value(final_pulse)
+    final_l1_penalty = penalty.l1_value(
+        final_parameters,
+        penalized_problem.parameter_shape,
+    )
+    final_l2_penalty = penalty.l2_value(
+        final_parameters,
+        penalized_problem.parameter_shape,
+    )
+    final_objective = penalized_problem.value(final_parameters)
 
     lower = np.broadcast_to(parameterization.lower, final_pulse.amplitudes.shape)
     upper = np.broadcast_to(parameterization.upper, final_pulse.amplitudes.shape)
@@ -248,11 +235,14 @@ def main():
 
     print(f"initial_fidelity={initial_fidelity:.12g}")
     print(f"final_fidelity={final_fidelity:.12g}")
-    print(f"initial_smooth_penalty={initial_penalty:.12g}")
-    print(f"final_smooth_penalty={final_penalty:.12g}")
+    print(f"initial_l1_penalty={initial_l1_penalty:.12g}")
+    print(f"final_l1_penalty={final_l1_penalty:.12g}")
+    print(f"initial_l2_penalty={initial_l2_penalty:.12g}")
+    print(f"final_l2_penalty={final_l2_penalty:.12g}")
     print(f"initial_penalized_objective={initial_objective:.12g}")
     print(f"final_penalized_objective={final_objective:.12g}")
-    print(f"smooth_penalty_weight={args.smooth_penalty_weight:.12g}")
+    print(f"l1_smooth_weight={args.l1_smooth_weight:.12g}")
+    print(f"l2_smooth_weight={args.l2_smooth_weight:.12g}")
     print(f"alpha1_cycles={args.alpha1_cycles:.12g}")
     print("target_state=(|00,0>-i|11,0>)/sqrt(2)")
     print(f"optimizer_success={result.success}")
