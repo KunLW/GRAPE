@@ -1,8 +1,37 @@
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
-from experiments.reporting import timestamped_report_path, write_experiment_report
+from experiments.reporting import (
+    FidelityTermsLog,
+    StepLog,
+    export_pulse_controls,
+    format_fidelity_terms_table_header,
+    format_fidelity_terms_table_row,
+    format_step_table_header,
+    format_step_table_row,
+    timestamped_experiment_dir,
+    timestamped_report_path,
+    write_fidelity_pair_terms_csv,
+    write_fidelity_terms_csv,
+    write_step_log_csv,
+    write_experiment_report,
+)
+from experiments.spin_boson_perturbative_initial_sweep import (
+    build_sweep_run_specs,
+    load_custom_initial_parameters,
+    noise_initial_parameters,
+    random_initial_parameters,
+    reference_pulse_and_parameterization,
+    write_summary_csv,
+    write_summary_markdown,
+)
+from experiments.spin_boson_perturbative_lbfgsb import (
+    load_custom_initial_parameters as load_single_custom_initial_parameters,
+    run_perturbative_experiment,
+)
 from quantum_control import (
     ControlProblem,
     EvolutionContext,
@@ -46,14 +75,29 @@ def test_timestamped_report_path_uses_safe_slug_and_markdown_extension(tmp_path)
 
     report_path = timestamped_report_path(tmp_path, "spin boson/perturbative", generated_at)
 
-    assert report_path == tmp_path / "spin_boson_perturbative_20260621_153012.md"
+    assert report_path == (
+        tmp_path / "spin_boson_perturbative_20260621_153012" / "report.md"
+    )
+
+
+def test_timestamped_experiment_dir_uses_safe_slug_and_timestamp(tmp_path):
+    generated_at = datetime(2026, 6, 21, 15, 30, 12)
+
+    experiment_dir = timestamped_experiment_dir(
+        tmp_path,
+        "spin boson/perturbative",
+        generated_at,
+    )
+
+    assert experiment_dir == tmp_path / "spin_boson_perturbative_20260621_153012"
 
 
 def test_write_experiment_report_includes_sections_and_relative_figures(tmp_path):
     output_dir = tmp_path / "outputs"
-    output_dir.mkdir()
-    pulse_plot = output_dir / "pulse.png"
-    propagation_plot = output_dir / "propagation.png"
+    run_dir = output_dir / "spin_boson_20260621_153012"
+    run_dir.mkdir(parents=True)
+    pulse_plot = run_dir / "pulse.png"
+    propagation_plot = run_dir / "propagation.png"
     pulse_plot.write_bytes(b"pulse")
     propagation_plot.write_bytes(b"propagation")
 
@@ -80,7 +124,7 @@ def test_write_experiment_report_includes_sections_and_relative_figures(tmp_path
     )
 
     markdown = report_path.read_text(encoding="utf-8")
-    assert report_path.name == "spin_boson_20260621_153012.md"
+    assert report_path == run_dir / "report.md"
     assert "# Spin-Boson Test" in markdown
     assert "## Configuration" in markdown
     assert "| n_levels | 6 |" in markdown
@@ -91,6 +135,518 @@ def test_write_experiment_report_includes_sections_and_relative_figures(tmp_path
     assert "## Figures" in markdown
     assert "![Pulse parameters](pulse.png)" in markdown
     assert "![State propagation](propagation.png)" in markdown
+
+
+def test_write_step_log_csv_includes_expected_headers_and_rows(tmp_path):
+    log_path = tmp_path / "step_log.csv"
+
+    write_step_log_csv(
+        log_path,
+        [
+            {
+                "step": 0,
+                "close_fidelity": 0.1,
+                "open_fidelity": 0.2,
+                "raw_fidelity": 0.35,
+                "l1_penalty": 0.01,
+                "l2_penalty": 0.04,
+                "cost_function": 0.3,
+                "gradient_norm": 0.7,
+            },
+            {
+                "step": 1,
+                "close_fidelity": 0.4,
+                "open_fidelity": 0.5,
+                "raw_fidelity": 0.7,
+                "l1_penalty": 0.03,
+                "l2_penalty": 0.07,
+                "cost_function": 0.6,
+                "gradient_norm": 0.8,
+            },
+        ],
+    )
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == (
+        "step,close_fidelity,open_fidelity,raw_fidelity,l1_penalty,l2_penalty,"
+        "cost_function,gradient_norm"
+    )
+    assert lines[1] == (
+        "0,0.10000000000000001,0.20000000000000001,0.34999999999999998,"
+        "0.01,0.040000000000000001,0.29999999999999999,0.69999999999999996"
+    )
+    assert lines[2] == (
+        "1,0.40000000000000002,0.5,0.69999999999999996,"
+        "0.029999999999999999,0.070000000000000007,0.59999999999999998,"
+        "0.80000000000000004"
+    )
+
+
+def test_step_log_prints_table_header_and_rows(tmp_path, capsys):
+    log = StepLog(tmp_path / "step_log.csv", print_steps=True)
+
+    log.append(
+        step=0,
+        close_fidelity=0.1,
+        open_fidelity=0.2,
+        raw_fidelity=0.35,
+        l1_penalty=0.01,
+        l2_penalty=0.04,
+        cost_function=0.3,
+        gradient_norm=0.7,
+    )
+
+    output = capsys.readouterr().out.splitlines()
+    assert output[0] == format_step_table_header()
+    assert output[0].startswith("step  close fidelity")
+    assert output[1] == format_step_table_row(
+        {
+            "step": 0,
+            "close_fidelity": 0.1,
+            "open_fidelity": 0.2,
+            "raw_fidelity": 0.35,
+            "l1_penalty": 0.01,
+            "l2_penalty": 0.04,
+            "cost_function": 0.3,
+            "gradient_norm": 0.7,
+        }
+    )
+
+
+def test_fidelity_terms_log_writes_csvs_and_prints_aligned_table(tmp_path, capsys):
+    summary = {
+        "step": 0,
+        "closed_term": 0.9,
+        "first_order_sq": 0.03,
+        "second_order_cross": 0.08,
+        "perturbative_open": 1.01,
+        "correction": 0.11,
+        "excess_over_1": 0.01,
+        "max_pair_open": 0.2,
+        "min_pair_open": -0.01,
+    }
+    pair = {
+        "step": 0,
+        "pair_index": 1,
+        "weight": 0.5,
+        "a0_real": 1.0,
+        "a0_imag": 0.0,
+        "a1_real": 0.1,
+        "a1_imag": 0.2,
+        "a2_real": 0.03,
+        "a2_imag": -0.04,
+        "closed_term": 0.5,
+        "first_order_sq": 0.025,
+        "second_order_cross": 0.03,
+        "perturbative_open": 0.555,
+        "dropped_order1_cross": 0.1,
+    }
+    log = FidelityTermsLog(
+        tmp_path / "fidelity_terms.csv",
+        tmp_path / "fidelity_terms_by_pair.csv",
+        print_steps=True,
+    )
+
+    log.append(summary, [pair])
+
+    output = capsys.readouterr().out.splitlines()
+    assert output[0] == format_fidelity_terms_table_header()
+    assert output[1] == format_fidelity_terms_table_row(summary)
+    summary_lines = (tmp_path / "fidelity_terms.csv").read_text(encoding="utf-8").splitlines()
+    pair_lines = (tmp_path / "fidelity_terms_by_pair.csv").read_text(encoding="utf-8").splitlines()
+    assert summary_lines[0].startswith("step,closed_term,first_order_sq,second_order_cross")
+    assert pair_lines[0].startswith("step,pair_index,weight,a0_real,a0_imag")
+
+
+def test_fidelity_terms_csv_helpers_write_expected_headers(tmp_path):
+    write_fidelity_terms_csv(
+        tmp_path / "summary.csv",
+        [
+            {
+                "step": 2,
+                "closed_term": 0.8,
+                "first_order_sq": 0.1,
+                "second_order_cross": 0.2,
+                "perturbative_open": 1.1,
+                "correction": 0.3,
+                "excess_over_1": 0.1,
+                "max_pair_open": 0.4,
+                "min_pair_open": 0.0,
+            }
+        ],
+    )
+    write_fidelity_pair_terms_csv(
+        tmp_path / "pairs.csv",
+        [
+            {
+                "step": 2,
+                "pair_index": 3,
+                "weight": 0.5,
+                "a0_real": 1.0,
+                "a0_imag": 0.0,
+                "a1_real": 0.0,
+                "a1_imag": 0.0,
+                "a2_real": 0.0,
+                "a2_imag": 0.0,
+                "closed_term": 0.5,
+                "first_order_sq": 0.0,
+                "second_order_cross": 0.0,
+                "perturbative_open": 0.5,
+                "dropped_order1_cross": 0.0,
+            }
+        ],
+    )
+
+    assert "excess_over_1" in (tmp_path / "summary.csv").read_text(encoding="utf-8")
+    assert "dropped_order1_cross" in (tmp_path / "pairs.csv").read_text(encoding="utf-8")
+
+
+def test_export_pulse_controls_writes_npz_keys_and_csv_columns(tmp_path):
+    pulse = PiecewiseConstantPulse(
+        np.array([[1.0, 2.0], [3.0, 4.0]], dtype=float),
+        dt=0.25,
+    )
+
+    npz_path, csv_path = export_pulse_controls(
+        pulse,
+        tmp_path / "initial_pulse",
+        rad_s_per_khz=2.0,
+    )
+
+    data = np.load(npz_path)
+    assert set(data.files) == {
+        "amplitudes",
+        "dt",
+        "time_s",
+        "time_us",
+        "rad_s_per_khz",
+        "channel_names",
+    }
+    assert np.allclose(data["amplitudes"], pulse.amplitudes)
+    assert float(data["dt"]) == 0.25
+    assert np.allclose(data["time_s"], [0.125, 0.375])
+    assert np.allclose(data["time_us"], [125000.0, 375000.0])
+    assert float(data["rad_s_per_khz"]) == 2.0
+    assert data["channel_names"].tolist() == ["alpha1", "alpha2"]
+
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == (
+        "step_index,time_s,time_us,alpha1_rad_s,alpha2_rad_s,"
+        "alpha1_khz,alpha2_khz"
+    )
+    assert lines[1] == "0,0.125,125000,1,2,0.5,1"
+    assert lines[2] == "1,0.375,375000,3,4,1.5,2"
+
+
+def test_sweep_noise_initial_parameters_are_reproducible_and_clipped():
+    base = np.zeros((4, 2), dtype=float)
+
+    first = noise_initial_parameters(base, np.random.default_rng(123), 0.3)
+    second = noise_initial_parameters(base, np.random.default_rng(123), 0.3)
+    clipped = noise_initial_parameters(np.full((4, 2), 0.95), np.random.default_rng(1), 10.0)
+
+    assert np.allclose(first, second)
+    assert np.all(clipped >= -1.0)
+    assert np.all(clipped <= 1.0)
+
+
+def test_sweep_random_initial_parameters_respect_bounds_and_endpoint_mask():
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+
+    parameters = random_initial_parameters(reference_pulse.amplitudes.shape, np.random.default_rng(5))
+    pulse = PiecewiseConstantPulse(parameterization.to_physical(parameters), reference_pulse.dt)
+
+    assert np.all(parameters >= -1.0)
+    assert np.all(parameters <= 1.0)
+    assert np.allclose(pulse.amplitudes[[0, -1], 1], 0.0)
+
+
+def test_sweep_custom_npz_imports_pulse_and_records_matching_dt(tmp_path):
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+    compatible_amplitudes = parameterization.to_physical(
+        parameterization.to_parameters(reference_pulse.amplitudes)
+    )
+    npz_path = tmp_path / "pulse.npz"
+    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=reference_pulse.dt)
+
+    parameters, metadata = load_custom_initial_parameters(
+        npz_path,
+        reference_pulse,
+        parameterization,
+    )
+
+    assert np.allclose(parameterization.to_physical(parameters), compatible_amplitudes)
+    assert metadata["source_dt"] == reference_pulse.dt
+    assert metadata["dt_missing"] is False
+    assert metadata["dt_mismatch"] is False
+    assert metadata["warnings"] == []
+
+
+def test_sweep_custom_npz_missing_dt_continues_with_warning(tmp_path):
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+    compatible_amplitudes = parameterization.to_physical(
+        parameterization.to_parameters(reference_pulse.amplitudes)
+    )
+    npz_path = tmp_path / "pulse_missing_dt.npz"
+    np.savez(npz_path, amplitudes=compatible_amplitudes)
+
+    _parameters, metadata = load_custom_initial_parameters(
+        npz_path,
+        reference_pulse,
+        parameterization,
+    )
+
+    assert metadata["source_dt"] == "NA"
+    assert metadata["dt_missing"] is True
+    assert metadata["dt_mismatch"] is False
+    assert "has no dt" in metadata["warnings"][0]
+
+
+def test_sweep_custom_npz_mismatched_dt_continues_with_warning(tmp_path):
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+    compatible_amplitudes = parameterization.to_physical(
+        parameterization.to_parameters(reference_pulse.amplitudes)
+    )
+    npz_path = tmp_path / "pulse_mismatched_dt.npz"
+    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=2.0 * reference_pulse.dt)
+
+    _parameters, metadata = load_custom_initial_parameters(
+        npz_path,
+        reference_pulse,
+        parameterization,
+    )
+
+    assert metadata["source_dt"] == 2.0 * reference_pulse.dt
+    assert metadata["dt_missing"] is False
+    assert metadata["dt_mismatch"] is True
+    assert "differs from experiment" in metadata["warnings"][0]
+
+
+def test_single_perturbative_experiment_custom_npz_loader_allows_mismatched_dt(tmp_path):
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+    compatible_amplitudes = parameterization.to_physical(
+        parameterization.to_parameters(reference_pulse.amplitudes)
+    )
+    npz_path = tmp_path / "single_pulse.npz"
+    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=2.0 * reference_pulse.dt)
+
+    parameters, metadata = load_single_custom_initial_parameters(
+        npz_path,
+        reference_pulse,
+        parameterization,
+    )
+
+    assert np.allclose(parameterization.to_physical(parameters), compatible_amplitudes)
+    assert metadata["dt_mismatch"] is True
+    assert metadata["dt_missing"] is False
+
+
+def test_perturbative_experiment_writes_latest_checkpoint_outputs(tmp_path):
+    args = SimpleNamespace(
+        maxiter=1,
+        n_steps=5,
+        alpha1_cycles=1.0,
+        l1_smooth_weight=0.0,
+        l2_smooth_weight=0.0,
+        workers=1,
+        print_step=False,
+        print_fidelity_terms=False,
+        initial_pulse_npz=None,
+        no_progress=True,
+    )
+
+    result = run_perturbative_experiment(
+        args,
+        experiment_dir=tmp_path / "run",
+        print_report=False,
+    )
+
+    outputs = result["outputs"]
+    assert outputs["latest_pulse_npz"].exists()
+    assert outputs["latest_pulse_csv"].exists()
+    assert outputs["latest_parameters"].exists()
+    data = np.load(outputs["latest_parameters"])
+    assert int(data["step"]) >= 0
+    report = result["report_path"].read_text(encoding="utf-8")
+    assert "| latest_pulse_npz | latest_pulse.npz |" in report
+    assert "| latest_parameters | latest_parameters.npz |" in report
+
+
+def test_perturbative_experiment_writes_fidelity_term_diagnostics(tmp_path):
+    args = SimpleNamespace(
+        maxiter=1,
+        n_steps=5,
+        alpha1_cycles=1.0,
+        l1_smooth_weight=0.0,
+        l2_smooth_weight=0.0,
+        workers=1,
+        print_step=False,
+        print_fidelity_terms=False,
+        save_fidelity_terms=True,
+        initial_pulse_npz=None,
+        no_progress=True,
+    )
+
+    result = run_perturbative_experiment(
+        args,
+        experiment_dir=tmp_path / "diagnostic_run",
+        print_report=False,
+    )
+
+    outputs = result["outputs"]
+    assert outputs["fidelity_terms"].exists()
+    assert outputs["fidelity_terms_by_pair"].exists()
+    summary_lines = outputs["fidelity_terms"].read_text(encoding="utf-8").splitlines()
+    pair_lines = outputs["fidelity_terms_by_pair"].read_text(encoding="utf-8").splitlines()
+    assert summary_lines[0].startswith("step,closed_term,first_order_sq")
+    assert "dropped_order1_cross" in pair_lines[0]
+    assert len(summary_lines) >= 2
+    assert len(pair_lines) > len(summary_lines)
+    report = result["report_path"].read_text(encoding="utf-8")
+    assert "| fidelity_terms | fidelity_terms.csv |" in report
+    assert "| fidelity_terms_by_pair | fidelity_terms_by_pair.csv |" in report
+
+
+def test_perturbative_experiment_interrupt_uses_latest_pulse_for_report(tmp_path):
+    args = SimpleNamespace(
+        maxiter=5,
+        n_steps=5,
+        alpha1_cycles=1.0,
+        l1_smooth_weight=0.0,
+        l2_smooth_weight=0.0,
+        workers=1,
+        print_step=False,
+        print_fidelity_terms=False,
+        initial_pulse_npz=None,
+        no_progress=True,
+    )
+
+    with patch(
+        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
+        side_effect=KeyboardInterrupt,
+    ):
+        result = run_perturbative_experiment(
+            args,
+            experiment_dir=tmp_path / "interrupted_run",
+            print_report=False,
+        )
+
+    assert result["interrupted"] is True
+    assert result["result"].success is False
+    assert "INTERRUPTED" in result["result"].message
+    assert result["outputs"]["final_pulse_npz"].exists()
+    assert result["outputs"]["final_pulse_csv"].exists()
+    assert result["report_path"].exists()
+    report = result["report_path"].read_text(encoding="utf-8")
+    assert "| interrupted | True |" in report
+
+
+def test_sweep_custom_npz_rejects_incompatible_shape_endpoint_and_bounds(tmp_path):
+    reference_pulse, parameterization = reference_pulse_and_parameterization(
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+    bad_shape = tmp_path / "bad_shape.npz"
+    bad_endpoint = tmp_path / "bad_endpoint.npz"
+    bad_bounds = tmp_path / "bad_bounds.npz"
+    np.savez(bad_shape, amplitudes=reference_pulse.amplitudes[:-1], dt=reference_pulse.dt)
+    endpoint_amplitudes = np.array(reference_pulse.amplitudes, copy=True)
+    endpoint_amplitudes[0, 1] = 1.0
+    np.savez(bad_endpoint, amplitudes=endpoint_amplitudes, dt=reference_pulse.dt)
+    bounds_amplitudes = np.array(reference_pulse.amplitudes, copy=True)
+    bounds_amplitudes[1, 0] = 1e12
+    np.savez(bad_bounds, amplitudes=bounds_amplitudes, dt=reference_pulse.dt)
+
+    for path, message in [
+        (bad_shape, "shape"),
+        (bad_endpoint, "endpoints"),
+        (bad_bounds, "bounds"),
+    ]:
+        try:
+            load_custom_initial_parameters(path, reference_pulse, parameterization)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"Expected {path} to be rejected.")
+
+
+def test_sweep_summary_writers_include_expected_columns_and_paths(tmp_path):
+    rows = [
+        {
+            "mode": "custom",
+            "run_index": 1,
+            "seed": "NA",
+            "source_npz": "pulse.npz",
+            "source_dt": "NA",
+            "experiment_dt": 0.1,
+            "dt_missing": True,
+            "dt_mismatch": False,
+            "success": True,
+            "nit": 1,
+            "nfev": 2,
+            "initial_open_gate_fidelity": 0.1,
+            "final_open_gate_fidelity": 0.3,
+            "initial_close_gate_fidelity": 0.2,
+            "final_close_gate_fidelity": 0.4,
+            "initial_cost": 0.05,
+            "final_cost": 0.25,
+            "initial_l1_penalty": 0.0,
+            "final_l1_penalty": 0.01,
+            "initial_l2_penalty": 0.0,
+            "final_l2_penalty": 0.02,
+            "experiment_dir": tmp_path / "run",
+        }
+    ]
+
+    write_summary_csv(tmp_path / "summary.csv", rows)
+    write_summary_markdown(tmp_path / "summary.md", rows)
+
+    csv_lines = (tmp_path / "summary.csv").read_text(encoding="utf-8").splitlines()
+    markdown = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert csv_lines[0].startswith("mode,run_index,seed,source_npz,source_dt")
+    assert "pulse.npz" in csv_lines[1]
+    assert "Top Runs by Final Cost" in markdown
+    assert "| mode | run_index | seed | final_cost | final_open_gate_fidelity | experiment_dir |" in markdown
+    assert str(tmp_path / "run") in markdown
+
+
+def test_sweep_run_specs_include_both_modes_with_deterministic_labels(tmp_path):
+    args = SimpleNamespace(
+        initial_mode="both",
+        n_runs=2,
+        seed=10,
+        noise_scale=0.3,
+        initial_pulse_npz=[],
+        n_steps=5,
+        alpha1_cycles=1.0,
+    )
+
+    specs = build_sweep_run_specs(args, tmp_path, datetime(2026, 6, 22, 12, 0, 0))
+
+    assert [spec["label"] for spec in specs] == [
+        "noise_seed_10",
+        "noise_seed_11",
+        "random_seed_12",
+        "random_seed_13",
+    ]
+    assert [spec["run_index"] for spec in specs] == [1, 2, 3, 4]
+    assert [spec["mode"] for spec in specs] == ["noise", "noise", "random", "random"]
+    assert all(spec["experiment_dir"].parent == tmp_path for spec in specs)
 
 
 def two_level_problem(amplitudes, initial_state=None, target_state=None):
@@ -592,6 +1148,32 @@ def test_perturbative_gradient_matches_finite_difference_with_full_dv_derivative
 
     assert analytic.shape == amplitudes.shape
     assert np.allclose(analytic, finite_difference, rtol=2e-2, atol=2e-5)
+
+
+def test_perturbative_gradient_frechet_dv_derivative_matches_finite_difference():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    problem = two_level_problem(amplitudes)
+    step_builder = PerturbativeStepBuilder(dW_method="frechet")
+    problem = ControlProblem(
+        system=problem.system,
+        pulse=problem.pulse,
+        context=problem.context,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=problem.objective,
+        differentiator=PerturbativeExpansionDifferentiator(
+            step_builder,
+            problem.objective,
+        ),
+    )
+    analytic = problem.gradient()
+    finite_difference = FiniteDifferenceDifferentiator(
+        problem.evolution,
+        problem.objective,
+        epsilon=1e-6,
+    ).gradient(problem.system, problem.pulse, problem.context)
+
+    assert analytic.shape == amplitudes.shape
+    assert np.allclose(analytic, finite_difference, rtol=1e-6, atol=1e-9)
 
 
 def test_state_average_fidelity_matches_single_state_problem_for_one_pair():

@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
@@ -18,7 +20,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments.reporting import write_experiment_report
+from experiments.reporting import (
+    FidelityTermsLog,
+    StepLog,
+    export_pulse_controls,
+    timestamped_experiment_dir,
+    write_experiment_report_at,
+)
 from quantum_control import (
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
@@ -45,14 +53,14 @@ from quantum_control import (
     two_qubit_spin_phase_difference,
 )
 from quantum_control.optimizers import ScipyOptimizer
-
+from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
 N_LEVELS = 6
 N_STEPS = 200
 MAXITER = 20
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
-DEFAULT_L1_SMOOTH_WEIGHT = 0.1
-DEFAULT_L2_SMOOTH_WEIGHT = 1
+DEFAULT_L1_SMOOTH_WEIGHT = 0.001
+DEFAULT_L2_SMOOTH_WEIGHT = 0.00015
 
 
 class OptimizationProgressBar:
@@ -116,7 +124,7 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
         ],
         control_fluctuations=[
             0.001 * np.kron(spin_identity, number),
-            0.005 * 0.5 * np.kron(s_phi, displacement),
+            0.003 * np.kron(s_phi, displacement),
         ],
     )
 
@@ -178,11 +186,36 @@ def parse_args():
         help="Number of worker processes for perturbative state-pair averaging.",
     )
     parser.add_argument(
+        "--print-step",
+        action="store_true",
+        help="Print per-step close fidelity, open fidelity, and cost function.",
+    )
+    parser.add_argument(
+        "--print-fidelity-terms",
+        action="store_true",
+        help="Print and save per-step perturbative fidelity term diagnostics.",
+    )
+    parser.add_argument(
+        "--initial-pulse-npz",
+        type=Path,
+        default=None,
+        help="Load a custom initial pulse .npz with an amplitudes array.",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable the optimization progress bar.",
     )
     return parser.parse_args()
+
+
+class CombinedCallback:
+    def __init__(self, *callbacks):
+        self.callbacks = tuple(callback for callback in callbacks if callback is not None)
+
+    def __call__(self, parameters):
+        for callback in self.callbacks:
+            callback(parameters)
 
 
 def propagate_states(evolution, system, pulse, context):
@@ -325,7 +358,7 @@ def format_value(value):
     return str(value)
 
 
-def print_experiment_report(args, result, metrics, pulse_path, propagation_path):
+def print_experiment_report(args, result, metrics, outputs):
     print("\n=== Perturbative Open-Gate Optimization ===")
     print_section(
         "Configuration",
@@ -387,8 +420,21 @@ def print_experiment_report(args, result, metrics, pulse_path, propagation_path)
     print_section(
         "Outputs",
         [
-            ("pulse_plot", pulse_path),
-            ("propagation_plot", propagation_path),
+            ("pulse_plot", outputs["pulse_plot"]),
+            ("propagation_plot", outputs["propagation_plot"]),
+            ("step_log", outputs["step_log"]),
+            *(
+                [
+                    ("fidelity_terms", outputs["fidelity_terms"]),
+                    ("fidelity_terms_by_pair", outputs["fidelity_terms_by_pair"]),
+                ]
+                if outputs.get("fidelity_terms") is not None
+                else []
+            ),
+            ("initial_pulse_npz", outputs["initial_pulse_npz"]),
+            ("initial_pulse_csv", outputs["initial_pulse_csv"]),
+            ("final_pulse_npz", outputs["final_pulse_npz"]),
+            ("final_pulse_csv", outputs["final_pulse_csv"]),
         ],
     )
 
@@ -397,19 +443,175 @@ def _transition(initial, final):
     delta = final - initial
     return f"{initial:.12g} -> {final:.12g} (delta {delta:+.3g})"
 
+def _customized_initial_pulse(
+    n_steps=200,
+    total_time_us=225.8,
+    alpha1_khz_bounds=(1.0, 600.0),
+    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_cycles=1.0,
+):
+    if n_steps < 1:
+        raise ValueError("n_steps must be at least 1.")
+    total_time = float(total_time_us) * 1e-6
+    if total_time <= 0.0:
+        raise ValueError("total_time_us must be positive.")
+    if alpha1_cycles <= 0.0:
+        raise ValueError("alpha1_cycles must be positive.")
 
-def main():
-    args = parse_args()
+    alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
+    alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
+    dt = total_time / n_steps
+    normalized_time = (np.arange(n_steps, dtype=float) + 0.5) / n_steps
+
+    alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
+    alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
+    alpha1 = alpha1_center + 0.3 + 0.7 * alpha1_scale * np.cos(
+        2.0 * np.pi * alpha1_cycles * normalized_time
+    )
+    alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(
+        np.pi * normalized_time
+    )
+
+    return PiecewiseConstantPulse(
+        amplitudes=np.column_stack([alpha1, alpha2]),
+        dt=dt,
+    )
+def _khz_bounds_to_rad_s(bounds):
+    lower, upper = np.asarray(bounds, dtype=float)
+    if upper <= lower:
+        raise ValueError("upper bounds must be greater than lower bounds.")
+    return 2.0 * np.pi * 1000.0 * lower, 2.0 * np.pi * 1000.0 * upper
+
+
+def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, atol=1e-9):
+    npz_path = Path(npz_path)
+    with np.load(npz_path) as data:
+        if "amplitudes" not in data.files:
+            raise ValueError(f"{npz_path} does not contain required 'amplitudes'.")
+        amplitudes = np.asarray(data["amplitudes"], dtype=float)
+        source_dt = float(np.asarray(data["dt"]).reshape(())) if "dt" in data.files else None
+
+    if amplitudes.shape != reference_pulse.amplitudes.shape:
+        raise ValueError(
+            f"{npz_path} amplitudes shape {amplitudes.shape} does not match "
+            f"expected {reference_pulse.amplitudes.shape}."
+        )
+    if not np.allclose(amplitudes[[0, -1], 1], 0.0, atol=atol):
+        raise ValueError(f"{npz_path} alpha2 endpoints must be zero.")
+
+    parameters = parameterization.to_parameters(amplitudes)
+    if np.any(parameters < -1.0 - atol) or np.any(parameters > 1.0 + atol):
+        raise ValueError(f"{npz_path} amplitudes exceed the configured parameter bounds.")
+    parameters = np.clip(parameters, -1.0, 1.0)
+
+    experiment_dt = float(reference_pulse.dt)
+    dt_missing = source_dt is None
+    dt_mismatch = False if source_dt is None else not np.isclose(source_dt, experiment_dt)
+    warnings = []
+    if dt_missing:
+        warnings.append(f"warning: {npz_path} has no dt; using experiment dt {experiment_dt:.12g}.")
+    elif dt_mismatch:
+        warnings.append(
+            f"warning: {npz_path} dt={source_dt:.12g} differs from experiment "
+            f"dt={experiment_dt:.12g}; using experiment dt."
+        )
+
+    return parameters, {
+        "source_npz": str(npz_path),
+        "source_dt": "NA" if source_dt is None else source_dt,
+        "experiment_dt": experiment_dt,
+        "dt_missing": dt_missing,
+        "dt_mismatch": dt_mismatch,
+        "warnings": warnings,
+    }
+
+
+def perturbative_fidelity_terms(system, pulse, target_gate, n_levels):
+    step_builder = PerturbativeStepBuilder()
+    objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
+    evolution = PerturbativeExpansionEvolution(step_builder, max_order=2)
+    pair_rows = []
+    for pair_index, pair in enumerate(motion_resolved_gate_state_pairs(target_gate, n_levels)):
+        context = EvolutionContext(
+            initial_state=pair.initial_state,
+            target_state=pair.target_state,
+        )
+        amplitudes = objective.amplitudes(evolution.evolve(system, pulse, context))
+        a0 = amplitudes.get(0, 0.0 + 0.0j)
+        a1 = amplitudes.get(1, 0.0 + 0.0j)
+        a2 = amplitudes.get(2, 0.0 + 0.0j)
+        weight = float(pair.weight)
+        closed_term = weight * float(np.abs(a0) ** 2)
+        first_order_sq = weight * float(np.abs(a1) ** 2)
+        second_order_cross = weight * float(2.0 * np.real(np.conj(a0) * a2))
+        dropped_order1_cross = weight * float(2.0 * np.real(np.conj(a0) * a1))
+        pair_rows.append(
+            {
+                "pair_index": pair_index,
+                "weight": weight,
+                "a0_real": float(np.real(a0)),
+                "a0_imag": float(np.imag(a0)),
+                "a1_real": float(np.real(a1)),
+                "a1_imag": float(np.imag(a1)),
+                "a2_real": float(np.real(a2)),
+                "a2_imag": float(np.imag(a2)),
+                "closed_term": closed_term,
+                "first_order_sq": first_order_sq,
+                "second_order_cross": second_order_cross,
+                "perturbative_open": closed_term + first_order_sq + second_order_cross,
+                "dropped_order1_cross": dropped_order1_cross,
+            }
+        )
+
+    closed_term = float(sum(row["closed_term"] for row in pair_rows))
+    first_order_sq = float(sum(row["first_order_sq"] for row in pair_rows))
+    second_order_cross = float(sum(row["second_order_cross"] for row in pair_rows))
+    perturbative_open = closed_term + first_order_sq + second_order_cross
+    pair_open_values = [row["perturbative_open"] for row in pair_rows]
+    summary = {
+        "closed_term": closed_term,
+        "first_order_sq": first_order_sq,
+        "second_order_cross": second_order_cross,
+        "perturbative_open": perturbative_open,
+        "correction": first_order_sq + second_order_cross,
+        "excess_over_1": perturbative_open - 1.0,
+        "max_pair_open": float(max(pair_open_values)),
+        "min_pair_open": float(min(pair_open_values)),
+    }
+    return summary, pair_rows
+
+
+def run_perturbative_experiment(
+    args,
+    initial_parameters=None,
+    run_label=None,
+    output_root=OUTPUT_DIR,
+    experiment_dir=None,
+    generated_at=None,
+    extra_configuration=(),
+    print_report=True,
+):
     phi_s = 0.0
     system = spin_boson_control_system(n_levels=N_LEVELS, phi_s=phi_s)
     noisy_system = spin_boson_noisy_control_system(n_levels=N_LEVELS, phi_s=phi_s)
-    initial_pulse = spin_boson_initial_pulse(
+
+
+    initial_pulse = _customized_initial_pulse(
         n_steps=args.n_steps,
         alpha1_cycles=args.alpha1_cycles,
     )
     parameterization = Alpha2EndpointZeroParameterization(
         spin_boson_parameterization(initial_pulse.n_steps)
     )
+    custom_initial_metadata = None
+    if initial_parameters is None and getattr(args, "initial_pulse_npz", None) is not None:
+        initial_parameters, custom_initial_metadata = load_custom_initial_parameters(
+            args.initial_pulse_npz,
+            initial_pulse,
+            parameterization,
+        )
+        for warning in custom_initial_metadata["warnings"]:
+            print(warning, file=sys.stderr, flush=True)
     target_gate = ms_xx_pi_over_2_gate()
     state_pairs = motion_resolved_gate_state_pairs(target_gate, N_LEVELS)
 
@@ -437,7 +639,13 @@ def main():
         l2_weight=args.l2_smooth_weight,
     )
     penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)
-    initial_parameters = penalized_problem.initial_parameters()
+    initial_parameters = (
+        penalized_problem.initial_parameters()
+        if initial_parameters is None
+        else np.asarray(initial_parameters, dtype=float).reshape(
+            penalized_problem.parameter_shape
+        )
+    )
     initial_objective = penalized_problem.value(initial_parameters)
     initial_l1_penalty = penalty.l1_value(
         initial_parameters,
@@ -447,6 +655,14 @@ def main():
         initial_parameters,
         penalized_problem.parameter_shape,
     )
+    masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
+    generated_at = generated_at or datetime.now()
+    experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
+        output_root,
+        run_label or "spin_boson_perturbative",
+        generated_at,
+    )
+    experiment_dir.mkdir(parents=True, exist_ok=True)
 
     optimizer_options = {"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15}
     optimizer = ScipyOptimizer(
@@ -454,13 +670,127 @@ def main():
         maximize=True,
         options=optimizer_options,
     )
-    progress = None if args.no_progress else OptimizationProgressBar(args.maxiter)
+    progress = (
+        None
+        if args.no_progress or args.print_step
+        else OptimizationProgressBar(args.maxiter)
+    )
+    step_log_path = experiment_dir / "step_log.csv"
+    fidelity_terms_path = experiment_dir / "fidelity_terms.csv"
+    fidelity_pair_terms_path = experiment_dir / "fidelity_terms_by_pair.csv"
+    latest_pulse_stem = experiment_dir / "latest_pulse"
+    latest_parameters_path = experiment_dir / "latest_parameters.npz"
+    step_log = StepLog(step_log_path, print_steps=args.print_step)
+    save_fidelity_terms = getattr(
+        args,
+        "save_fidelity_terms",
+        getattr(args, "print_fidelity_terms", False),
+    )
+    fidelity_terms_log = (
+        FidelityTermsLog(
+            fidelity_terms_path,
+            fidelity_pair_terms_path,
+            print_steps=getattr(args, "print_fidelity_terms", False),
+        )
+        if save_fidelity_terms
+        else None
+    )
+    step_counter = {"value": 0}
+    latest_state = {
+        "step": 0,
+        "parameters": np.asarray(initial_parameters, dtype=float),
+        "pulse": masked_initial_pulse,
+    }
+
+    def record_step(step, parameters):
+        pulse = penalized_problem.pulse_from_parameters(parameters)
+        l1_penalty = penalty.l1_value(parameters, penalized_problem.parameter_shape)
+        l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
+        step_log.append(
+            step=step,
+            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, N_LEVELS),
+            open_fidelity=open_gate_fidelity(
+                noisy_system,
+                pulse,
+                target_gate,
+                N_LEVELS,
+                n_workers=args.workers,
+            ),
+            cost_function=penalized_problem.value(parameters),
+            raw_fidelity=penalized_problem.raw_value(parameters),
+            l1_penalty=l1_penalty,
+            l2_penalty=l2_penalty,
+            gradient_norm=np.linalg.norm(penalized_problem.gradient(parameters)),
+        )
+        if fidelity_terms_log is not None:
+            fidelity_summary, fidelity_pair_rows = perturbative_fidelity_terms(
+                noisy_system,
+                pulse,
+                target_gate,
+                N_LEVELS,
+            )
+            fidelity_summary["step"] = int(step)
+            for row in fidelity_pair_rows:
+                row["step"] = int(step)
+            fidelity_terms_log.append(fidelity_summary, fidelity_pair_rows)
+        latest_pulse_npz_path, latest_pulse_csv_path = export_pulse_controls(
+            pulse,
+            latest_pulse_stem,
+            RAD_S_PER_KHZ,
+        )
+        np.savez(
+            latest_parameters_path,
+            parameters=np.asarray(parameters, dtype=float),
+            step=int(step),
+            pulse_npz=str(latest_pulse_npz_path),
+            pulse_csv=str(latest_pulse_csv_path),
+        )
+        latest_state["step"] = int(step)
+        latest_state["parameters"] = np.asarray(parameters, dtype=float).reshape(
+            penalized_problem.parameter_shape
+        )
+        latest_state["pulse"] = pulse
+
+    def step_callback(parameters):
+        step_counter["value"] += 1
+        record_step(step_counter["value"], parameters)
+
+    callback = CombinedCallback(progress, step_callback)
+    record_step(0, initial_parameters)
     if progress is not None:
         progress.start()
+    interrupted = False
     try:
-        result = optimizer.optimize_parameters(penalized_problem, callback=progress)
-        final_pulse = result.optimized_pulse
-        final_parameters = result.x.reshape(penalized_problem.parameter_shape)
+        try:
+            result = optimizer.optimize_parameters(
+                penalized_problem,
+                initial_parameters=initial_parameters,
+                callback=callback,
+            )
+            final_pulse = result.optimized_pulse
+            final_parameters = result.x.reshape(penalized_problem.parameter_shape)
+        except KeyboardInterrupt:
+            interrupted = True
+            final_parameters = np.asarray(latest_state["parameters"], dtype=float).reshape(
+                penalized_problem.parameter_shape
+            )
+            final_pulse = latest_state["pulse"]
+            result = SimpleNamespace(
+                success=False,
+                message=(
+                    "INTERRUPTED: optimization stopped by user; "
+                    "using latest accepted pulse for report."
+                ),
+                nit=int(latest_state["step"]),
+                nfev="NA",
+                x=final_parameters.reshape(-1),
+                optimized_pulse=final_pulse,
+            )
+            print(
+                "\ninterrupted=True; using latest accepted pulse for final report.",
+                file=sys.stderr,
+                flush=True,
+            )
         final_objective = penalized_problem.value(final_parameters)
     finally:
         optimization_problem.shutdown()
@@ -475,7 +805,6 @@ def main():
         penalized_problem.parameter_shape,
     )
 
-    masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
     if not np.allclose(masked_initial_pulse.amplitudes[[0, -1], 1], 0.0):
         raise RuntimeError("Initial alpha2 endpoints are not masked to zero.")
     if not np.allclose(final_pulse.amplitudes[[0, -1], 1], 0.0):
@@ -536,8 +865,18 @@ def main():
 
     time_us = (np.arange(initial_pulse.n_steps) + 0.5) * initial_pulse.dt * 1e6
     time_edges_us = np.arange(initial_pulse.n_steps + 1) * initial_pulse.dt * 1e6
-    pulse_path = OUTPUT_DIR / "spin_boson_perturbative_pulses.png"
-    propagation_path = OUTPUT_DIR / "spin_boson_perturbative_state_propagation.png"
+    pulse_path = experiment_dir / "spin_boson_perturbative_pulses.png"
+    propagation_path = experiment_dir / "spin_boson_perturbative_state_propagation.png"
+    initial_pulse_npz_path, initial_pulse_csv_path = export_pulse_controls(
+        masked_initial_pulse,
+        experiment_dir / "initial_pulse",
+        RAD_S_PER_KHZ,
+    )
+    final_pulse_npz_path, final_pulse_csv_path = export_pulse_controls(
+        final_pulse,
+        experiment_dir / "final_pulse",
+        RAD_S_PER_KHZ,
+    )
 
     metrics = {
         "initial_fidelity": initial_single_state_fidelity,
@@ -564,15 +903,29 @@ def main():
         note=experiment_note,
     )
 
-    for path in (pulse_path, propagation_path):
+    for path in (
+        pulse_path,
+        propagation_path,
+        step_log_path,
+        latest_pulse_stem.with_suffix(".npz"),
+        latest_pulse_stem.with_suffix(".csv"),
+        latest_parameters_path,
+        initial_pulse_npz_path,
+        initial_pulse_csv_path,
+        final_pulse_npz_path,
+        final_pulse_csv_path,
+    ):
         if not path.exists() or path.stat().st_size == 0:
-            raise RuntimeError(f"Expected non-empty plot at {path}.")
+            raise RuntimeError(f"Expected non-empty output at {path}.")
+    if fidelity_terms_log is not None:
+        for path in (fidelity_terms_path, fidelity_pair_terms_path):
+            if not path.exists() or path.stat().st_size == 0:
+                raise RuntimeError(f"Expected non-empty fidelity diagnostics at {path}.")
 
     bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
     bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
-    report_path = write_experiment_report(
-        output_dir=OUTPUT_DIR,
-        experiment_slug="spin_boson_perturbative",
+    report_path = write_experiment_report_at(
+        report_path=experiment_dir / "report.md",
         title="Spin-Boson Perturbative Open-Gate Optimization",
         configuration=[
             ("objective", "open_gate_fidelity_expansion"),
@@ -594,9 +947,29 @@ def main():
             ("workers", args.workers),
             ("normalize_weights", False),
             ("no_progress", args.no_progress),
+            ("print_step", args.print_step),
+            ("print_fidelity_terms", getattr(args, "print_fidelity_terms", False)),
+            ("save_fidelity_terms", save_fidelity_terms),
+            ("interrupted", interrupted),
+            ("reported_final_step", getattr(result, "nit", "NA")),
             ("state_pair_count", len(state_pairs)),
             ("l1_smooth_weight", args.l1_smooth_weight),
             ("l2_smooth_weight", args.l2_smooth_weight),
+            *custom_initial_configuration(custom_initial_metadata),
+            *extra_configuration,
+            ("step_log", step_log_path.name),
+            ("fidelity_terms", fidelity_terms_path.name if save_fidelity_terms else "disabled"),
+            (
+                "fidelity_terms_by_pair",
+                fidelity_pair_terms_path.name if save_fidelity_terms else "disabled",
+            ),
+            ("latest_pulse_npz", latest_pulse_stem.with_suffix(".npz").name),
+            ("latest_pulse_csv", latest_pulse_stem.with_suffix(".csv").name),
+            ("latest_parameters", latest_parameters_path.name),
+            ("initial_pulse_npz", initial_pulse_npz_path.name),
+            ("initial_pulse_csv", initial_pulse_csv_path.name),
+            ("final_pulse_npz", final_pulse_npz_path.name),
+            ("final_pulse_csv", final_pulse_csv_path.name),
             ("optimizer_method", "L-BFGS-B"),
             ("optimizer_maximize", True),
             ("optimizer_options", optimizer_options),
@@ -631,10 +1004,68 @@ def main():
             ("Pulse parameters", pulse_path),
             ("State propagation", propagation_path),
         ],
+        generated_at=generated_at,
     )
 
-    print_experiment_report(args, result, metrics, pulse_path, propagation_path)
-    print(f"markdown_report={report_path}")
+    outputs = {
+        "pulse_plot": pulse_path,
+        "propagation_plot": propagation_path,
+        "step_log": step_log_path,
+        "fidelity_terms": fidelity_terms_path if save_fidelity_terms else None,
+        "fidelity_terms_by_pair": fidelity_pair_terms_path if save_fidelity_terms else None,
+        "latest_pulse_npz": latest_pulse_stem.with_suffix(".npz"),
+        "latest_pulse_csv": latest_pulse_stem.with_suffix(".csv"),
+        "latest_parameters": latest_parameters_path,
+        "initial_pulse_npz": initial_pulse_npz_path,
+        "initial_pulse_csv": initial_pulse_csv_path,
+        "final_pulse_npz": final_pulse_npz_path,
+        "final_pulse_csv": final_pulse_csv_path,
+    }
+    if print_report:
+        print_experiment_report(args, result, metrics, outputs)
+        print(f"experiment_dir={experiment_dir}")
+        print(f"step_log={step_log_path}")
+        if save_fidelity_terms:
+            print(f"fidelity_terms={fidelity_terms_path}")
+            print(f"fidelity_terms_by_pair={fidelity_pair_terms_path}")
+        print(f"latest_pulse_npz={latest_pulse_stem.with_suffix('.npz')}")
+        print(f"latest_pulse_csv={latest_pulse_stem.with_suffix('.csv')}")
+        print(f"latest_parameters={latest_parameters_path}")
+        print(f"initial_pulse_npz={initial_pulse_npz_path}")
+        print(f"initial_pulse_csv={initial_pulse_csv_path}")
+        print(f"final_pulse_npz={final_pulse_npz_path}")
+        print(f"final_pulse_csv={final_pulse_csv_path}")
+        print(f"markdown_report={report_path}")
+
+    return {
+        "args": args,
+        "result": result,
+        "metrics": metrics,
+        "outputs": outputs,
+        "experiment_dir": experiment_dir,
+        "report_path": report_path,
+        "initial_parameters": initial_parameters,
+        "final_parameters": final_parameters,
+        "custom_initial_metadata": custom_initial_metadata,
+        "interrupted": interrupted,
+    }
+
+
+def custom_initial_configuration(metadata):
+    if metadata is None:
+        return ()
+    return (
+        ("initial_pulse_source", "custom_npz"),
+        ("source_npz", metadata["source_npz"]),
+        ("source_dt", metadata["source_dt"]),
+        ("experiment_dt", metadata["experiment_dt"]),
+        ("dt_missing", metadata["dt_missing"]),
+        ("dt_mismatch", metadata["dt_mismatch"]),
+    )
+
+
+def main():
+    run_perturbative_experiment(parse_args())
 
 
 if __name__ == "__main__":
