@@ -1,1 +1,0 @@
-mode,run_index,seed,source_npz,source_dt,experiment_dt,dt_missing,dt_mismatch,success,nit,nfev,initial_open_gate_fidelity,final_open_gate_fidelity,initial_close_gate_fidelity,final_close_gate_fidelity,initial_cost,final_cost,initial_l1_penalty,final_l1_penalty,initial_l2_penalty,final_l2_penalty,experiment_dir

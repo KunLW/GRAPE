@@ -41,6 +41,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Experiment outputs
+experiments/outputs/
+
 # doc
 *.pdf
 *.bcf
