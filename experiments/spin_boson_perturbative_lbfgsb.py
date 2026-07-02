@@ -61,8 +61,8 @@ N_LEVELS = 6
 N_STEPS = 200
 MAXITER = 20
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
-DEFAULT_L1_SMOOTH_WEIGHT = 0.001
-DEFAULT_L2_SMOOTH_WEIGHT = 0.00015
+DEFAULT_L1_SMOOTH_WEIGHT = 0.0001
+DEFAULT_L2_SMOOTH_WEIGHT = 0.00005
 
 
 class OptimizationProgressBar:
@@ -131,7 +131,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
         _noise_term_spec(
             kind="static",
             name="static[0]",
-            coefficient=314.159,
+            coefficient=314.159 * 0.1,
             operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
             definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
             usage="added directly to H_fluctuation",
@@ -139,7 +139,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
         _noise_term_spec(
             kind="static",
             name="static[1]",
-            coefficient=300,
+            coefficient=300 * 0.1,
             operator=np.kron(spin_identity, number),
             definition="kron(I_spin, number_operator)",
             usage="added directly to H_fluctuation",
@@ -147,7 +147,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
         _noise_term_spec(
             kind="control",
             name="control[0]",
-            coefficient=0.0003,
+            coefficient=0.0001,
             operator=np.kron(spin_identity, number),
             definition="kron(I_spin, number_operator)",
             usage="alpha1(t) * control[0]",
@@ -155,7 +155,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
         _noise_term_spec(
             kind="control",
             name="control[1]",
-            coefficient=0.0006,
+            coefficient=0.0001,
             operator=DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
             definition="eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta=0.075",
             usage="alpha2(t) * control[1]",
