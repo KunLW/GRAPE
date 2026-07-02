@@ -1,0 +1,6 @@
+PWD /Users/kun/Documents/GRAPE VERGE
+INPUT /usr/local/texlive/2025/texmf.cnf
+INPUT /usr/local/texlive/2025/texmf-dist/web2c/texmf.cnf
+INPUT /usr/local/texlive/2025/texmf-var/web2c/xetex/xelatex.fmt
+INPUT doc/report_opengrape_iontrap.tex
+OUTPUT report_opengrape_iontrap.log

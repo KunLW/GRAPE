@@ -1,4 +1,8 @@
 from datetime import datetime
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,11 +33,15 @@ from experiments.spin_boson_perturbative_initial_sweep import (
     write_summary_markdown,
 )
 from experiments.spin_boson_perturbative_lbfgsb import (
+    calculate_kappa_metrics,
     load_custom_initial_parameters as load_single_custom_initial_parameters,
     run_perturbative_experiment,
+    spin_boson_noise_term_specs,
+    spin_boson_noisy_control_system,
 )
 from quantum_control import (
     ControlProblem,
+    DEFAULT_LAMB_DICKE_ETA,
     EvolutionContext,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
@@ -64,10 +72,20 @@ from quantum_control import (
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
+    two_qubit_spin_phase_mode,
     two_qubit_spin_phase_difference,
     two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+from quantum_control.diagnostics.error_budget import (
+    ErrorBudgetConfig,
+    evaluate_error_budget,
+    load_pulse_npz,
+    write_error_budget_report,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_timestamped_report_path_uses_safe_slug_and_markdown_extension(tmp_path):
@@ -338,6 +356,23 @@ def test_export_pulse_controls_writes_npz_keys_and_csv_columns(tmp_path):
     assert lines[2] == "1,0.375,375000,3,4,1.5,2"
 
 
+def test_load_pulse_npz_uses_dt_or_fallback(tmp_path):
+    amplitudes = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=float)
+    with_dt = tmp_path / "with_dt.npz"
+    without_dt = tmp_path / "without_dt.npz"
+    np.savez(with_dt, amplitudes=amplitudes, dt=0.05)
+    np.savez(without_dt, amplitudes=amplitudes)
+
+    pulse = load_pulse_npz(with_dt)
+    fallback_pulse = load_pulse_npz(without_dt, fallback_dt=0.07)
+
+    assert np.allclose(pulse.amplitudes, amplitudes)
+    assert pulse.dt == 0.05
+    assert fallback_pulse.dt == 0.07
+    with np.testing.assert_raises_regex(ValueError, "fallback_dt"):
+        load_pulse_npz(without_dt)
+
+
 def test_sweep_noise_initial_parameters_are_reproducible_and_clipped():
     base = np.zeros((4, 2), dtype=float)
 
@@ -485,6 +520,150 @@ def test_perturbative_experiment_writes_latest_checkpoint_outputs(tmp_path):
     report = result["report_path"].read_text(encoding="utf-8")
     assert "| latest_pulse_npz | latest_pulse.npz |" in report
     assert "| latest_parameters | latest_parameters.npz |" in report
+    assert "## Preview" in report
+    assert "## Noise Terms" in report
+    assert "## System Construction Script" in report
+    assert "### Kappa Diagnostics" in report
+    assert "kappa_1" in report
+    assert "kappa_2" in report
+    assert "max_boundary_corner" in report
+    assert "over alpha bounds" in report
+    assert "H_nominal(alpha)" in report
+    assert "H_fluctuation(alpha)" in report
+    assert "kappa_boundary_corner_count" in report
+    assert "static[0]" in report
+    assert "314.159" in report
+    assert "kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)" in report
+    assert "static[1]" in report
+    assert "1256.637" in report
+    assert "kron(I_spin, number_operator)" in report
+    assert "control[0]" in report
+    assert "0.0003" in report
+    assert "alpha1(t) * control[0]" in report
+    assert "control[1]" in report
+    assert "0.0006" in report
+    assert "eta * kron(S_phi(mode=(0.5, -0.5)), X1)" in report
+    assert "eta=0.075" in report
+    assert "alpha2(t) * control[1]" in report
+    assert "## Results" in report
+    assert report.index("## Preview") < report.index("## Results")
+
+
+def test_perturbative_experiment_prints_kappa_when_step_printing_enabled(tmp_path, capsys):
+    args = SimpleNamespace(
+        maxiter=5,
+        n_steps=5,
+        alpha1_cycles=1.0,
+        l1_smooth_weight=0.0,
+        l2_smooth_weight=0.0,
+        workers=1,
+        print_step=True,
+        print_fidelity_terms=False,
+        initial_pulse_npz=None,
+        no_progress=True,
+    )
+
+    with patch(
+        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
+        side_effect=KeyboardInterrupt,
+    ):
+        run_perturbative_experiment(
+            args,
+            experiment_dir=tmp_path / "print_kappa",
+            print_report=False,
+        )
+
+    output = capsys.readouterr().out
+    assert "=== Optimization Preview ===" in output
+    assert "[Kappa Diagnostics]" in output
+    assert "kappa_1" in output
+    assert "kappa_2" in output
+    assert "kappa_1_corner" in output
+    assert "kappa_2_corner" in output
+
+
+def test_spin_boson_noise_specs_drive_noisy_system_terms():
+    specs = spin_boson_noise_term_specs(n_levels=3, phi_s=0.0)
+    noisy_system = spin_boson_noisy_control_system(n_levels=3, phi_s=0.0)
+    matrices = tuple(noisy_system.static_fluctuations) + tuple(noisy_system.control_fluctuations)
+
+    assert [spec["name"] for spec in specs] == ["static[0]", "static[1]", "control[0]", "control[1]"]
+    assert [spec["coefficient"] for spec in specs] == [314.159, 1256.637, 0.0003, 0.0006]
+    for spec, matrix in zip(specs, matrices, strict=True):
+        assert np.allclose(spec["matrix"], spec["coefficient"] * spec["operator"])
+        assert np.allclose(spec["matrix"], matrix)
+
+
+def test_kappa_metrics_use_alpha_bounds_corners_not_initial_pulse_samples():
+    class ToySystem:
+        def nominal_hamiltonian(self, controls):
+            return np.array([[controls[0] + 2.0 * controls[1]]], dtype=complex)
+
+    class ToyNoisySystem:
+        def fluctuation_hamiltonian(self, controls):
+            return np.array([[5.0 * controls[0] - controls[1]]], dtype=complex)
+
+    class ToyBaseParameterization:
+        def _bounds_for(self, shape):
+            return (
+                np.tile(np.array([-1.0, -2.0]), (shape[0], 1)),
+                np.tile(np.array([3.0, 4.0]), (shape[0], 1)),
+            )
+
+    pulse = PiecewiseConstantPulse(
+        amplitudes=np.array([[0.0, 0.0], [0.5, 0.5]], dtype=float),
+        dt=0.1,
+    )
+    parameterization = SimpleNamespace(base=ToyBaseParameterization())
+
+    metrics = calculate_kappa_metrics(ToySystem(), ToyNoisySystem(), pulse, parameterization)
+
+    assert metrics["boundary_corner_count"] == 4
+    assert np.isclose(metrics["kappa_1"], 1.1)
+    assert np.isclose(metrics["kappa_2"], 3.4)
+    assert metrics["kappa_1_alpha"] == (3.0, 4.0)
+    assert metrics["kappa_2_alpha"] == (3.0, -2.0)
+
+
+def test_perturbative_experiment_writes_preview_before_optimizer(tmp_path):
+    args = SimpleNamespace(
+        maxiter=5,
+        n_steps=5,
+        alpha1_cycles=1.0,
+        l1_smooth_weight=0.0,
+        l2_smooth_weight=0.0,
+        workers=1,
+        print_step=False,
+        print_fidelity_terms=False,
+        initial_pulse_npz=None,
+        no_progress=True,
+    )
+    report_path = tmp_path / "preview_before_optimizer" / "report.md"
+
+    def assert_preview_written(*_args, **_kwargs):
+        assert report_path.exists()
+        markdown = report_path.read_text(encoding="utf-8")
+        assert "## Preview" in markdown
+        assert "## Noise Terms" in markdown
+        assert "## System Construction Script" in markdown
+        assert "_Optimization has not completed yet. Final results will be appended here._" in markdown
+        raise KeyboardInterrupt
+
+    with patch(
+        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
+        side_effect=assert_preview_written,
+    ):
+        result = run_perturbative_experiment(
+            args,
+            experiment_dir=tmp_path / "preview_before_optimizer",
+            print_report=False,
+        )
+
+    report = result["report_path"].read_text(encoding="utf-8")
+    assert result["interrupted"] is True
+    assert "_Optimization has not completed yet" not in report
+    assert "## Results" in report
+    assert report.index("## Preview") < report.index("## Results")
 
 
 def test_perturbative_experiment_writes_fidelity_term_diagnostics(tmp_path):
@@ -702,8 +881,12 @@ def test_spin_boson_operators_use_truncated_oscillator_conventions():
     assert np.allclose(spin_phase_operator(0.0), sx)
     assert np.allclose(spin_phase_operator(np.pi / 2.0), sy)
     assert np.allclose(
+        two_qubit_spin_phase_mode(0.0, (0.5, 0.5)),
+        0.5 * (np.kron(sx, np.eye(2)) + np.kron(np.eye(2), sx)),
+    )
+    assert np.allclose(
         two_qubit_spin_phase_difference(0.0),
-        np.kron(sx, np.eye(2)) - np.kron(np.eye(2), sx),
+        0.5 * (np.kron(sx, np.eye(2)) - np.kron(np.eye(2), sx)),
     )
 
 
@@ -715,9 +898,22 @@ def test_spin_boson_control_system_builds_two_control_hamiltonians():
     system = spin_boson_control_system(n_levels=n_levels, phi_s=phi_s)
     a = annihilation_operator(n_levels)
     adag = a.conj().T
-    expected_hamiltonian = (
+    x1 = 0.5 * (a + adag)
+    stretch_hamiltonian = (
         alpha_1 * np.kron(np.eye(4), adag @ a)
-        + alpha_2 * np.kron(two_qubit_spin_phase_difference(phi_s), a + adag)
+        + alpha_2
+        * DEFAULT_LAMB_DICKE_ETA
+        * np.kron(two_qubit_spin_phase_difference(phi_s), x1)
+    )
+    com_spin = two_qubit_spin_phase_mode(phi_s, (0.5, 0.5))
+    com_hamiltonian = (
+        alpha_1 * np.kron(np.eye(4), adag @ a)
+        + alpha_2 * DEFAULT_LAMB_DICKE_ETA * np.kron(com_spin, x1)
+    )
+    com_system = spin_boson_control_system(
+        n_levels=n_levels,
+        phi_s=phi_s,
+        mode_vector=(0.5, 0.5),
     )
 
     assert system.drift.shape == (12, 12)
@@ -725,7 +921,11 @@ def test_spin_boson_control_system_builds_two_control_hamiltonians():
     assert system.controls[1].shape == (12, 12)
     assert np.allclose(
         system.nominal_hamiltonian([alpha_1, alpha_2]),
-        expected_hamiltonian,
+        stretch_hamiltonian,
+    )
+    assert np.allclose(
+        com_system.nominal_hamiltonian([alpha_1, alpha_2]),
+        com_hamiltonian,
     )
 
 
@@ -811,7 +1011,7 @@ def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
     pulse = spin_boson_initial_pulse()
     alpha1_lower = 2.0 * np.pi * 1000.0
-    alpha1_upper = 2.0 * np.pi * 600000.0
+    alpha1_upper = 2.0 * np.pi * 10000.0
     alpha2_upper = 2.0 * np.pi * 20000.0
     alpha1 = pulse.amplitudes[:, 0]
     alpha2 = pulse.amplitudes[:, 1]
@@ -848,7 +1048,7 @@ def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
     )
     assert np.allclose(
         parameterization.upper,
-        np.array([2.0 * np.pi * 600000.0, 2.0 * np.pi * 20000.0]),
+        np.array([2.0 * np.pi * 10000.0, 2.0 * np.pi * 20000.0]),
     )
     assert np.allclose(reconstructed, pulse.amplitudes)
     assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10
@@ -1176,6 +1376,41 @@ def test_perturbative_gradient_frechet_dv_derivative_matches_finite_difference()
     assert np.allclose(analytic, finite_difference, rtol=1e-6, atol=1e-9)
 
 
+def test_perturbative_v_method_leading_matches_default_and_frechet_commuting_case():
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = IonTrapRFSystem(
+        drift=0.2 * sz,
+        controls=[0.3 * sz],
+        static_fluctuations=[0.01 * sz],
+        control_fluctuations=[0.02 * sz],
+    )
+    controls = np.array([0.4])
+    default_step = PerturbativeStepBuilder().build_step(system, controls, 0.05)
+    leading_step = PerturbativeStepBuilder(V_method="leading").build_step(system, controls, 0.05)
+    frechet_step = PerturbativeStepBuilder(V_method="frechet").build_step(system, controls, 0.05)
+
+    assert np.allclose(leading_step.W, default_step.W)
+    assert np.allclose(leading_step.V, default_step.V)
+    assert np.allclose(frechet_step.V, leading_step.V)
+
+
+def test_perturbative_v_method_frechet_is_finite_for_noncommuting_case():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = IonTrapRFSystem(
+        drift=0.2 * sz,
+        controls=[sx],
+        static_fluctuations=[0.03 * sx],
+        control_fluctuations=[0.04 * sz],
+    )
+    controls = np.array([0.5])
+    leading_step = PerturbativeStepBuilder(V_method="leading").build_step(system, controls, 0.2)
+    frechet_step = PerturbativeStepBuilder(V_method="frechet").build_step(system, controls, 0.2)
+
+    assert np.all(np.isfinite(frechet_step.V))
+    assert not np.allclose(frechet_step.V, leading_step.V, rtol=1e-8, atol=1e-12)
+
+
 def test_state_average_fidelity_matches_single_state_problem_for_one_pair():
     amplitudes = np.array([[0.2], [0.25], [0.15]])
     problem = two_level_problem(amplitudes)
@@ -1195,6 +1430,107 @@ def test_state_average_fidelity_matches_single_state_problem_for_one_pair():
 
     assert np.allclose(averaged.value(), problem.value())
     assert np.allclose(averaged.gradient(), problem.gradient())
+
+
+def test_error_budget_evaluates_toy_problem_and_writes_report(tmp_path):
+    problem = two_level_problem(np.array([[0.2], [0.25]], dtype=float))
+    state_pairs = [
+        StatePair(
+            initial_state=problem.context.initial_state,
+            target_state=problem.context.target_state,
+        )
+    ]
+
+    report = evaluate_error_budget(
+        problem.system,
+        problem.pulse,
+        state_pairs,
+        ErrorBudgetConfig(
+            gradient_samples=2,
+            fluctuation_scales=(0.5,),
+            random_seed=7,
+        ),
+    )
+    outputs = write_error_budget_report(report, tmp_path)
+
+    assert outputs["markdown"].exists()
+    assert outputs["csv"].exists()
+    markdown = outputs["markdown"].read_text(encoding="utf-8")
+    assert "## Summary" in markdown
+    assert "| W error |" in markdown
+    assert "| dW error |" in markdown
+    assert "| V fidelity error |" in markdown
+    assert "| truncation fidelity error |" in markdown
+    assert "| sigmaT squared estimate |" in markdown
+    assert "| optimization perturbative fidelity |" in markdown
+    assert any(row["metric"] == "unitarity_fro_max" for row in report.rows)
+    assert any(row["metric"] == "norm_first_minus_fd" for row in report.rows)
+    assert any(row["metric"] == "fidelity_leading_minus_frechet" for row in report.rows)
+    assert any(row["metric"] == "sigmaT_squared_estimate" for row in report.rows)
+    finite_values = [
+        row["value"]
+        for row in report.rows
+        if row["available"] and isinstance(row["value"], (float, int, np.floating))
+    ]
+    assert finite_values
+    assert np.all(np.isfinite(finite_values))
+
+
+def test_error_budget_cli_smoke_test(tmp_path):
+    pulse_path = tmp_path / "pulse.npz"
+    output_dir = tmp_path / "report"
+    factory_path = tmp_path / "toy_factory.py"
+    np.savez(pulse_path, amplitudes=np.array([[0.2], [0.25]], dtype=float), dt=0.05)
+    factory_path.write_text(
+        "\n".join(
+            [
+                "import numpy as np",
+                "from quantum_control import IonTrapRFSystem, StatePair",
+                "",
+                "def build():",
+                "    sx = np.array([[0, 1], [1, 0]], dtype=complex)",
+                "    sz = np.array([[1, 0], [0, -1]], dtype=complex)",
+                "    system = IonTrapRFSystem(",
+                "        drift=0.1 * sz,",
+                "        controls=[sx],",
+                "        static_fluctuations=[0.01 * sz],",
+                "        control_fluctuations=[0.02 * sx],",
+                "    )",
+                "    pair = StatePair(",
+                "        np.array([1.0, 0.0], dtype=complex),",
+                "        np.array([0.0, 1.0], dtype=complex),",
+                "    )",
+                "    return system, [pair], {'label': 'toy'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/evaluate_error_budget.py",
+            "--pulse-npz",
+            str(pulse_path),
+            "--system-factory",
+            "toy_factory:build",
+            "--output-dir",
+            str(output_dir),
+            "--gradient-samples",
+            "1",
+            "--scales",
+            "0.5",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "error_budget_md=" in result.stdout
+    assert (output_dir / "error_budget.md").exists()
+    assert (output_dir / "error_budget.csv").exists()
 
 
 def test_state_average_fidelity_uses_weighted_value_and_gradient_average():

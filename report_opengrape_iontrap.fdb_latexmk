@@ -1,0 +1,18 @@
+# Fdb version 4
+["xdvipdfmx"] 0 "report_opengrape_iontrap.xdv" "report_opengrape_iontrap.pdf" "report_opengrape_iontrap" 0 -1
+  "report_opengrape_iontrap.xdv" 0 -1 0 "xelatex"
+  (generated)
+  "report_opengrape_iontrap.pdf"
+  (rewritten before read)
+["xelatex"] 1782891877.97032 "doc/report_opengrape_iontrap.tex" "report_opengrape_iontrap.xdv" "report_opengrape_iontrap" 1782891878.1101 2
+  "/usr/local/texlive/2025/texmf-dist/web2c/texmf.cnf" 1739380943 42148 61becc7c670cd061bb319c643c27fdd4 ""
+  "/usr/local/texlive/2025/texmf-var/web2c/xetex/xelatex.fmt" 1757919729 5639804 98c08bd7b8fbc39f6323cf185faf0813 ""
+  "/usr/local/texlive/2025/texmf.cnf" 1741450484 577 418a7058ec8e006d8704f60ecd22c938 ""
+  "doc/report_opengrape_iontrap.tex" 1782891558.73325 21440 b50f38ca1f11a252bc7b4986968afb07 ""
+  "notes.cls" 0 -1 0 ""
+  "report_opengrape_iontrap.aux" 1782891877.96991 32 3985256e7290058c681f74d7a3565a19 "xelatex"
+  (generated)
+  "report_opengrape_iontrap.aux"
+  "report_opengrape_iontrap.log"
+  "report_opengrape_iontrap.xdv"
+  (rewritten before read)

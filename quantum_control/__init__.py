@@ -21,6 +21,7 @@ from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems.closed_system import ClosedSystem, FluctuatingClosedSystem
 from quantum_control.systems.ion_trap_rf import IonTrapRFSystem
 from quantum_control.systems.spin_boson import (
+    DEFAULT_LAMB_DICKE_ETA,
     annihilation_operator,
     creation_operator,
     number_operator,
@@ -28,6 +29,7 @@ from quantum_control.systems.spin_boson import (
     spin_boson_initial_pulse,
     spin_boson_parameterization,
     spin_phase_operator,
+    two_qubit_spin_phase_mode,
     two_qubit_spin_phase_difference,
 )
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
@@ -43,12 +45,22 @@ from quantum_control.differentiators.expansion_differentiator import (
     PerturbativeExpansionDifferentiator,
 )
 from quantum_control.differentiators.grape import GrapeDifferentiator
+from quantum_control.diagnostics.error_budget import (
+    ErrorBudgetConfig,
+    ErrorBudgetReport,
+    evaluate_error_budget,
+    load_pulse_npz,
+    write_error_budget_report,
+)
 
 __all__ = [
     "ClosedSystem",
     "FluctuatingClosedSystem",
     "BoundedAmplitudeParameterization",
     "ControlProblem",
+    "DEFAULT_LAMB_DICKE_ETA",
+    "ErrorBudgetConfig",
+    "ErrorBudgetReport",
     "EvolutionContext",
     "ExpansionFidelity",
     "ExpansionStateAverageFidelity",
@@ -70,8 +82,10 @@ __all__ = [
     "UnitaryStepBuilder",
     "annihilation_operator",
     "creation_operator",
+    "evaluate_error_budget",
     "closed_gate_fidelity",
     "endpoint_masked_parameterization",
+    "load_pulse_npz",
     "motion_resolved_gate_state_pairs",
     "ms_xx_pi_over_2_gate",
     "number_operator",
@@ -81,6 +95,8 @@ __all__ = [
     "spin_boson_initial_pulse",
     "spin_boson_parameterization",
     "spin_phase_operator",
+    "two_qubit_spin_phase_mode",
     "two_qubit_spin_phase_difference",
     "two_qubit_logical_test_states",
+    "write_error_budget_report",
 ]

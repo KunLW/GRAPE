@@ -28,6 +28,7 @@ from experiments.reporting import (
     write_experiment_report_at,
 )
 from quantum_control import (
+    DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     EvolutionContext,
@@ -50,7 +51,7 @@ from quantum_control import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
-    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
 )
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
@@ -112,8 +113,8 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
     sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
     number = number_operator(n_levels)
-    displacement = annihilation_operator(n_levels) + creation_operator(n_levels)
-    s_phi = two_qubit_spin_phase_difference(phi_s)
+    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
     return spin_boson_control_system(
         n_levels=n_levels,
@@ -124,7 +125,7 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
         ],
         control_fluctuations=[
             0.01 * np.kron(spin_identity, number),
-            0.03 * np.kron(s_phi, displacement),
+            0.03 * DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
         ],
     )
 
@@ -446,7 +447,7 @@ def _transition(initial, final):
 def _customized_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 600.0),
+    alpha1_khz_bounds=(1.0, 10.0),
     alpha2_khz_bounds=(0.0, 20.0),
     alpha1_cycles=1.0,
 ):

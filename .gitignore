@@ -43,3 +43,9 @@ Thumbs.db
 
 # doc
 *.pdf
+*.bcf
+*.aux
+*.blg
+*.xml
+*.synctex.gz
+*-blx.bbl

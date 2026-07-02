@@ -25,9 +25,9 @@ from experiments.reporting import (
     StepLog,
     export_pulse_controls,
     timestamped_experiment_dir,
-    write_experiment_report_at,
 )
 from quantum_control import (
+    DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     EvolutionContext,
@@ -50,7 +50,7 @@ from quantum_control import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
-    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
 )
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
@@ -106,27 +106,73 @@ def ms_bell_target_motion_ground(n_levels):
 
 
 def spin_boson_noisy_control_system(n_levels, phi_s):
+    specs = spin_boson_noise_term_specs(n_levels, phi_s)
+    return spin_boson_control_system(
+        n_levels=n_levels,
+        phi_s=phi_s,
+        static_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "static"],
+        control_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "control"],
+    )
+
+
+def spin_boson_noise_term_specs(n_levels, phi_s):
     spin_identity = np.eye(4, dtype=complex)
     motion_identity = np.eye(n_levels, dtype=complex)
     single_identity = np.eye(2, dtype=complex)
     sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
     number = number_operator(n_levels)
-    displacement = annihilation_operator(n_levels) + creation_operator(n_levels)
-    s_phi = two_qubit_spin_phase_difference(phi_s)
+    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
-    return spin_boson_control_system(
-        n_levels=n_levels,
-        phi_s=phi_s,
-        static_fluctuations=[
-            314.159 * np.kron(0.5 * sz1_plus_sz2, motion_identity),
-            1256.637 * np.kron(spin_identity, number),
-        ],
-        control_fluctuations=[
-            0.001 * np.kron(spin_identity, number),
-            0.003 * np.kron(s_phi, displacement),
-        ],
-    )
+    return [
+        _noise_term_spec(
+            kind="static",
+            name="static[0]",
+            coefficient=314.159,
+            operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
+            definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
+            usage="added directly to H_fluctuation",
+        ),
+        _noise_term_spec(
+            kind="static",
+            name="static[1]",
+            coefficient=1256.637,
+            operator=np.kron(spin_identity, number),
+            definition="kron(I_spin, number_operator)",
+            usage="added directly to H_fluctuation",
+        ),
+        _noise_term_spec(
+            kind="control",
+            name="control[0]",
+            coefficient=0.0003,
+            operator=np.kron(spin_identity, number),
+            definition="kron(I_spin, number_operator)",
+            usage="alpha1(t) * control[0]",
+        ),
+        _noise_term_spec(
+            kind="control",
+            name="control[1]",
+            coefficient=0.0006,
+            operator=DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
+            definition="eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta=0.075",
+            usage="alpha2(t) * control[1]",
+        ),
+    ]
+
+
+def _noise_term_spec(kind, name, coefficient, operator, definition, usage):
+    coefficient = float(coefficient)
+    operator = np.asarray(operator, dtype=complex)
+    return {
+        "kind": kind,
+        "name": name,
+        "coefficient": coefficient,
+        "operator": operator,
+        "definition": definition,
+        "usage": usage,
+        "matrix": coefficient * operator,
+    }
 
 
 class Alpha2EndpointZeroParameterization:
@@ -443,10 +489,378 @@ def _transition(initial, final):
     delta = final - initial
     return f"{initial:.12g} -> {final:.12g} (delta {delta:+.3g})"
 
+
+def write_optimization_preview_report(
+    report_path,
+    *,
+    generated_at,
+    experiment_dir,
+    args,
+    initial_pulse,
+    parameterization,
+    noisy_system,
+    noise_specs,
+    phi_s,
+    state_pairs,
+    optimizer_options,
+    output_manifest,
+    initial_metrics,
+    kappa_metrics,
+    custom_initial_metadata,
+    extra_configuration,
+    save_fidelity_terms,
+):
+    lower, upper = parameterization.base._bounds_for(initial_pulse.amplitudes.shape)
+    bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
+    bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
+    report_path = Path(report_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Spin-Boson Perturbative Open-Gate Optimization",
+        "",
+        f"Generated at: {generated_at.isoformat(timespec='seconds')}",
+        "",
+        "## Preview",
+        "",
+        "### Configuration",
+        "",
+        _markdown_table(
+            ("Parameter", "Value"),
+            [
+                ("experiment_dir", experiment_dir),
+                ("objective", "open_gate_fidelity_expansion"),
+                ("target_state", "(|00,0>-i|11,0>)/sqrt(2)"),
+                ("target_gate", "MS_XX(pi/2)"),
+                ("n_levels", N_LEVELS),
+                ("n_steps", args.n_steps),
+                ("dt_s", initial_pulse.dt),
+                ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
+                ("phi_s", phi_s),
+                ("eta", DEFAULT_LAMB_DICKE_ETA),
+                ("alpha1_cycles", args.alpha1_cycles),
+                ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
+                ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
+                ("alpha2_endpoint_constraint", "initial and final alpha2 fixed to 0"),
+                ("static_fluctuation_count", len(noisy_system.static_fluctuations)),
+                ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
+                ("max_order", 2),
+                ("drop_odd_average", True),
+                ("workers", args.workers),
+                ("normalize_weights", False),
+                ("no_progress", args.no_progress),
+                ("print_step", args.print_step),
+                ("print_fidelity_terms", getattr(args, "print_fidelity_terms", False)),
+                ("save_fidelity_terms", save_fidelity_terms),
+                ("state_pair_count", len(state_pairs)),
+                ("l1_smooth_weight", args.l1_smooth_weight),
+                ("l2_smooth_weight", args.l2_smooth_weight),
+                *custom_initial_configuration(custom_initial_metadata),
+                *extra_configuration,
+            ],
+        ),
+        "",
+        "### Optimizer",
+        "",
+        _markdown_table(
+            ("Parameter", "Value"),
+            [
+                ("optimizer_method", "L-BFGS-B"),
+                ("optimizer_maximize", True),
+                ("optimizer_options", optimizer_options),
+            ],
+        ),
+        "",
+        "### Initial Metrics",
+        "",
+        _markdown_table(("Metric", "Value"), initial_metrics),
+        "",
+        "### Kappa Diagnostics",
+        "",
+        _markdown_table(("Metric", "Value", "Definition"), kappa_report_rows(kappa_metrics)),
+        "",
+        "### Output Manifest",
+        "",
+        _markdown_table(("Output", "Path"), output_manifest),
+        "",
+        "## Noise Terms",
+        "",
+        _markdown_table(
+            (
+                "Term",
+                "Coefficient",
+                "Definition",
+                "Usage",
+                "Shape",
+                "Frobenius Norm",
+                "Spectral Norm",
+                "Zero",
+            ),
+            noise_term_rows(noisy_system, noise_specs),
+        ),
+        "",
+        "## System Construction Script",
+        "",
+        "```python",
+        render_system_construction_script(args, optimizer_options),
+        "```",
+        "",
+        "## Results",
+        "",
+        "_Optimization has not completed yet. Final results will be appended here._",
+        "",
+    ]
+    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return report_path
+
+
+def append_optimization_results_report(
+    report_path,
+    *,
+    metrics,
+    result,
+    figures,
+    outputs,
+    interrupted,
+):
+    report_path = Path(report_path)
+    existing = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
+    placeholder = "## Results\n\n_Optimization has not completed yet. Final results will be appended here._\n"
+    result_lines = [
+        "## Results",
+        "",
+        _markdown_table(
+            ("Metric", "Initial", "Final", "Delta"),
+            [
+                _result_row("single_state_fidelity", metrics["initial_fidelity"], metrics["final_fidelity"]),
+                _result_row(
+                    "close_gate_fidelity",
+                    metrics["initial_close_gate_fidelity"],
+                    metrics["final_close_gate_fidelity"],
+                ),
+                _result_row(
+                    "open_gate_fidelity",
+                    metrics["initial_open_gate_fidelity"],
+                    metrics["final_open_gate_fidelity"],
+                ),
+                _result_row("l1_penalty", metrics["initial_l1_penalty"], metrics["final_l1_penalty"]),
+                _result_row("l2_penalty", metrics["initial_l2_penalty"], metrics["final_l2_penalty"]),
+                _result_row(
+                    "penalized_objective",
+                    metrics["initial_penalized_objective"],
+                    metrics["final_penalized_objective"],
+                ),
+            ],
+        ),
+        "",
+        "## Optimizer",
+        "",
+        _markdown_table(
+            ("Parameter", "Value"),
+            [
+                ("success", result.success),
+                ("message", result.message),
+                ("nit", getattr(result, "nit", "NA")),
+                ("nfev", getattr(result, "nfev", "NA")),
+                ("interrupted", interrupted),
+            ],
+        ),
+        "",
+        "## Final Outputs",
+        "",
+        _markdown_table(("Output", "Path"), outputs.items()),
+        "",
+        "## Figures",
+        "",
+    ]
+    for label, figure_path in figures:
+        relative_path = Path(figure_path).relative_to(report_path.parent)
+        result_lines.extend([f"### {_format_markdown_cell(label)}", "", f"![{label}]({relative_path.as_posix()})", ""])
+    result_markdown = "\n".join(result_lines).rstrip() + "\n"
+    if placeholder in existing:
+        report_path.write_text(existing.replace(placeholder, result_markdown), encoding="utf-8")
+    else:
+        report_path.write_text(existing.rstrip() + "\n\n" + result_markdown, encoding="utf-8")
+    return report_path
+
+
+def noise_term_rows(system, specs):
+    matrices = tuple(system.static_fluctuations) + tuple(system.control_fluctuations)
+    rows = []
+    for spec, matrix in zip(specs, matrices, strict=True):
+        matrix = np.asarray(matrix)
+        rows.append(
+            (
+                spec["name"],
+                spec["coefficient"],
+                spec["definition"],
+                spec["usage"],
+                "x".join(str(size) for size in matrix.shape),
+                float(np.linalg.norm(matrix, ord="fro")),
+                float(np.linalg.norm(matrix, ord=2)),
+                bool(np.allclose(matrix, 0.0)),
+            )
+        )
+    return rows
+
+
+def calculate_kappa_metrics(system, noisy_system, pulse, parameterization):
+    lower, upper = parameterization.base._bounds_for(pulse.amplitudes.shape)
+    channel_bounds = tuple(zip(lower[0], upper[0], strict=True))
+    boundary_controls = np.asarray(
+        np.meshgrid(*(bound for bound in channel_bounds), indexing="ij"),
+        dtype=float,
+    ).reshape(len(channel_bounds), -1).T
+    nominal_norms = []
+    fluctuation_norms = []
+    for controls in boundary_controls:
+        nominal_norms.append(float(np.linalg.norm(system.nominal_hamiltonian(controls), ord=2)))
+        fluctuation_norms.append(float(np.linalg.norm(noisy_system.fluctuation_hamiltonian(controls), ord=2)))
+    nominal_norms = np.asarray(nominal_norms, dtype=float)
+    fluctuation_norms = np.asarray(fluctuation_norms, dtype=float)
+    kappa_1_corner = int(np.argmax(nominal_norms)) if nominal_norms.size else 0
+    kappa_2_corner = int(np.argmax(fluctuation_norms)) if fluctuation_norms.size else 0
+    total_time = float(pulse.n_steps * pulse.dt)
+    return {
+        "kappa_1": float(pulse.dt * nominal_norms[kappa_1_corner]),
+        "kappa_2": float(total_time * fluctuation_norms[kappa_2_corner]),
+        "kappa_1_corner": kappa_1_corner,
+        "kappa_2_corner": kappa_2_corner,
+        "kappa_1_alpha": tuple(float(value) for value in boundary_controls[kappa_1_corner]),
+        "kappa_2_alpha": tuple(float(value) for value in boundary_controls[kappa_2_corner]),
+        "kappa_1_h_norm": float(nominal_norms[kappa_1_corner]),
+        "kappa_2_h_fluc_norm": float(fluctuation_norms[kappa_2_corner]),
+        "dt_s": float(pulse.dt),
+        "total_time_s": total_time,
+        "boundary_corner_count": int(len(boundary_controls)),
+    }
+
+
+def kappa_report_rows(metrics):
+    return [
+        (
+            "kappa_1",
+            metrics["kappa_1"],
+            "max_boundary_corner dt * ||H_nominal(alpha)||_2 over alpha bounds",
+        ),
+        (
+            "kappa_2",
+            metrics["kappa_2"],
+            "max_boundary_corner T * ||H_fluctuation(alpha)||_2 over alpha bounds; fluctuation terms are already scaled",
+        ),
+        ("kappa_1_corner", metrics["kappa_1_corner"], "boundary corner attaining max ||H_nominal||_2"),
+        ("kappa_2_corner", metrics["kappa_2_corner"], "boundary corner attaining max ||H_fluctuation||_2"),
+        ("kappa_1_alpha", metrics["kappa_1_alpha"], "alpha values at kappa_1 corner in rad/s"),
+        ("kappa_2_alpha", metrics["kappa_2_alpha"], "alpha values at kappa_2 corner in rad/s"),
+        ("kappa_1_h_norm", metrics["kappa_1_h_norm"], "max ||H_nominal||_2"),
+        ("kappa_2_h_fluc_norm", metrics["kappa_2_h_fluc_norm"], "max ||H_fluctuation||_2"),
+        ("kappa_dt_s", metrics["dt_s"], "pulse time step"),
+        ("kappa_total_time_s", metrics["total_time_s"], "pulse total duration"),
+        ("kappa_boundary_corner_count", metrics["boundary_corner_count"], "number of alpha-boundary corners evaluated"),
+    ]
+
+
+def render_system_construction_script(args, optimizer_options):
+    return "\n".join(
+        [
+            "phi_s = 0.0",
+            f"eta = {DEFAULT_LAMB_DICKE_ETA!r}",
+            f"system = spin_boson_control_system(n_levels={N_LEVELS}, phi_s=phi_s, eta=eta)",
+            f"noisy_system = spin_boson_noisy_control_system(n_levels={N_LEVELS}, phi_s=phi_s)",
+            "initial_pulse = _customized_initial_pulse(",
+            f"    n_steps={args.n_steps},",
+            f"    alpha1_cycles={args.alpha1_cycles!r},",
+            ")",
+            "parameterization = Alpha2EndpointZeroParameterization(",
+            "    spin_boson_parameterization(initial_pulse.n_steps)",
+            ")",
+            "target_gate = ms_xx_pi_over_2_gate()",
+            f"state_pairs = motion_resolved_gate_state_pairs(target_gate, {N_LEVELS})",
+            "step_builder = PerturbativeStepBuilder()",
+            "expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)",
+            "optimization_problem = ExpansionStateAverageFidelity(",
+            "    system=noisy_system,",
+            "    pulse=initial_pulse,",
+            "    evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),",
+            "    objective=expansion_objective,",
+            "    differentiator=PerturbativeExpansionDifferentiator(step_builder, expansion_objective),",
+            "    state_pairs=state_pairs,",
+            "    normalize_weights=False,",
+            f"    n_workers={args.workers},",
+            ")",
+            "parameterized_problem = ParameterizedControlProblem(optimization_problem, parameterization)",
+            "penalty = ParameterSmoothPenalty(",
+            f"    l1_weight={args.l1_smooth_weight!r},",
+            f"    l2_weight={args.l2_smooth_weight!r},",
+            ")",
+            "penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)",
+            "optimizer = ScipyOptimizer(",
+            "    method='L-BFGS-B',",
+            "    maximize=True,",
+            f"    options={optimizer_options!r},",
+            ")",
+        ]
+    )
+
+
+def print_optimization_preview(report_path, args, initial_metrics, kappa_metrics):
+    print("\n=== Optimization Preview ===")
+    print_section(
+        "Configuration",
+        [
+            ("n_levels", N_LEVELS),
+            ("n_steps", args.n_steps),
+            ("maxiter", args.maxiter),
+            ("workers", args.workers),
+            ("alpha1_cycles", format_value(args.alpha1_cycles)),
+            ("l1_smooth_weight", format_value(args.l1_smooth_weight)),
+            ("l2_smooth_weight", format_value(args.l2_smooth_weight)),
+        ],
+    )
+    print_section("Initial Metrics", [(name, format_value(value)) for name, value in initial_metrics])
+    print_section(
+        "Kappa Diagnostics",
+        [
+            ("kappa_1", format_value(kappa_metrics["kappa_1"])),
+            ("kappa_2", format_value(kappa_metrics["kappa_2"])),
+            ("kappa_1_corner", kappa_metrics["kappa_1_corner"]),
+            ("kappa_2_corner", kappa_metrics["kappa_2_corner"]),
+        ],
+    )
+    print(f"preview_report={report_path}")
+
+
+def _result_row(name, initial, final):
+    return (name, _format_markdown_value(initial), _format_markdown_value(final), _format_markdown_value(final - initial))
+
+
+def _markdown_table(headers, rows):
+    table = [
+        "| " + " | ".join(_format_markdown_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows:
+        table.append("| " + " | ".join(_format_markdown_cell(value) for value in row) + " |")
+    return "\n".join(table)
+
+
+def _format_markdown_cell(value):
+    return str(_format_markdown_value(value)).replace("|", "\\|").replace("\n", "<br>")
+
+
+def _format_markdown_value(value):
+    if isinstance(value, Path):
+        return value.name
+    if isinstance(value, float):
+        return f"{value:.12g}"
+    if value is None:
+        return "disabled"
+    return value
+
+
 def _customized_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 600.0),
+    alpha1_khz_bounds=(1.0, 10.0),
     alpha2_khz_bounds=(0.0, 20.0),
     alpha1_cycles=1.0,
 ):
@@ -593,6 +1007,7 @@ def run_perturbative_experiment(
 ):
     phi_s = 0.0
     system = spin_boson_control_system(n_levels=N_LEVELS, phi_s=phi_s)
+    noise_specs = spin_boson_noise_term_specs(n_levels=N_LEVELS, phi_s=phi_s)
     noisy_system = spin_boson_noisy_control_system(n_levels=N_LEVELS, phi_s=phi_s)
 
 
@@ -680,6 +1095,11 @@ def run_perturbative_experiment(
     fidelity_pair_terms_path = experiment_dir / "fidelity_terms_by_pair.csv"
     latest_pulse_stem = experiment_dir / "latest_pulse"
     latest_parameters_path = experiment_dir / "latest_parameters.npz"
+    pulse_path = experiment_dir / "spin_boson_perturbative_pulses.png"
+    propagation_path = experiment_dir / "spin_boson_perturbative_state_propagation.png"
+    initial_pulse_stem = experiment_dir / "initial_pulse"
+    final_pulse_stem = experiment_dir / "final_pulse"
+    report_path = experiment_dir / "report.md"
     step_log = StepLog(step_log_path, print_steps=args.print_step)
     save_fidelity_terms = getattr(
         args,
@@ -701,6 +1121,65 @@ def run_perturbative_experiment(
         "parameters": np.asarray(initial_parameters, dtype=float),
         "pulse": masked_initial_pulse,
     }
+    initial_preview_metrics = [
+        ("initial_penalized_objective", initial_objective),
+        ("initial_raw_fidelity", penalized_problem.raw_value(initial_parameters)),
+        (
+            "initial_close_gate_fidelity",
+            closed_gate_fidelity(system, masked_initial_pulse, target_gate, N_LEVELS),
+        ),
+        (
+            "initial_open_gate_fidelity",
+            open_gate_fidelity(
+                noisy_system,
+                masked_initial_pulse,
+                target_gate,
+                N_LEVELS,
+                n_workers=args.workers,
+            ),
+        ),
+        ("initial_l1_penalty", initial_l1_penalty),
+        ("initial_l2_penalty", initial_l2_penalty),
+    ]
+    kappa_metrics = calculate_kappa_metrics(system, noisy_system, masked_initial_pulse, parameterization)
+    output_manifest = [
+        ("pulse_plot", pulse_path.name),
+        ("propagation_plot", propagation_path.name),
+        ("step_log", step_log_path.name),
+        ("fidelity_terms", fidelity_terms_path.name if save_fidelity_terms else "disabled"),
+        (
+            "fidelity_terms_by_pair",
+            fidelity_pair_terms_path.name if save_fidelity_terms else "disabled",
+        ),
+        ("latest_pulse_npz", latest_pulse_stem.with_suffix(".npz").name),
+        ("latest_pulse_csv", latest_pulse_stem.with_suffix(".csv").name),
+        ("latest_parameters", latest_parameters_path.name),
+        ("initial_pulse_npz", initial_pulse_stem.with_suffix(".npz").name),
+        ("initial_pulse_csv", initial_pulse_stem.with_suffix(".csv").name),
+        ("final_pulse_npz", final_pulse_stem.with_suffix(".npz").name),
+        ("final_pulse_csv", final_pulse_stem.with_suffix(".csv").name),
+    ]
+    write_optimization_preview_report(
+        report_path,
+        generated_at=generated_at,
+        experiment_dir=experiment_dir,
+        args=args,
+        initial_pulse=initial_pulse,
+        parameterization=parameterization,
+        noisy_system=noisy_system,
+        noise_specs=noise_specs,
+        phi_s=phi_s,
+        state_pairs=state_pairs,
+        optimizer_options=optimizer_options,
+        output_manifest=output_manifest,
+        initial_metrics=initial_preview_metrics,
+        kappa_metrics=kappa_metrics,
+        custom_initial_metadata=custom_initial_metadata,
+        extra_configuration=extra_configuration,
+        save_fidelity_terms=save_fidelity_terms,
+    )
+    if print_report or args.print_step or getattr(args, "print_fidelity_terms", False):
+        print_optimization_preview(report_path, args, initial_preview_metrics, kappa_metrics)
 
     def record_step(step, parameters):
         pulse = penalized_problem.pulse_from_parameters(parameters)
@@ -865,16 +1344,14 @@ def run_perturbative_experiment(
 
     time_us = (np.arange(initial_pulse.n_steps) + 0.5) * initial_pulse.dt * 1e6
     time_edges_us = np.arange(initial_pulse.n_steps + 1) * initial_pulse.dt * 1e6
-    pulse_path = experiment_dir / "spin_boson_perturbative_pulses.png"
-    propagation_path = experiment_dir / "spin_boson_perturbative_state_propagation.png"
     initial_pulse_npz_path, initial_pulse_csv_path = export_pulse_controls(
         masked_initial_pulse,
-        experiment_dir / "initial_pulse",
+        initial_pulse_stem,
         RAD_S_PER_KHZ,
     )
     final_pulse_npz_path, final_pulse_csv_path = export_pulse_controls(
         final_pulse,
-        experiment_dir / "final_pulse",
+        final_pulse_stem,
         RAD_S_PER_KHZ,
     )
 
@@ -922,91 +1399,6 @@ def run_perturbative_experiment(
             if not path.exists() or path.stat().st_size == 0:
                 raise RuntimeError(f"Expected non-empty fidelity diagnostics at {path}.")
 
-    bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
-    bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
-    report_path = write_experiment_report_at(
-        report_path=experiment_dir / "report.md",
-        title="Spin-Boson Perturbative Open-Gate Optimization",
-        configuration=[
-            ("objective", "open_gate_fidelity_expansion"),
-            ("target_state", "(|00,0>-i|11,0>)/sqrt(2)"),
-            ("target_gate", "MS_XX(pi/2)"),
-            ("n_levels", N_LEVELS),
-            ("n_steps", args.n_steps),
-            ("dt_s", initial_pulse.dt),
-            ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
-            ("phi_s", phi_s),
-            ("alpha1_cycles", args.alpha1_cycles),
-            ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
-            ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
-            ("alpha2_endpoint_constraint", "initial and final alpha2 fixed to 0"),
-            ("static_fluctuation_count", len(noisy_system.static_fluctuations)),
-            ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
-            ("max_order", 2),
-            ("drop_odd_average", True),
-            ("workers", args.workers),
-            ("normalize_weights", False),
-            ("no_progress", args.no_progress),
-            ("print_step", args.print_step),
-            ("print_fidelity_terms", getattr(args, "print_fidelity_terms", False)),
-            ("save_fidelity_terms", save_fidelity_terms),
-            ("interrupted", interrupted),
-            ("reported_final_step", getattr(result, "nit", "NA")),
-            ("state_pair_count", len(state_pairs)),
-            ("l1_smooth_weight", args.l1_smooth_weight),
-            ("l2_smooth_weight", args.l2_smooth_weight),
-            *custom_initial_configuration(custom_initial_metadata),
-            *extra_configuration,
-            ("step_log", step_log_path.name),
-            ("fidelity_terms", fidelity_terms_path.name if save_fidelity_terms else "disabled"),
-            (
-                "fidelity_terms_by_pair",
-                fidelity_pair_terms_path.name if save_fidelity_terms else "disabled",
-            ),
-            ("latest_pulse_npz", latest_pulse_stem.with_suffix(".npz").name),
-            ("latest_pulse_csv", latest_pulse_stem.with_suffix(".csv").name),
-            ("latest_parameters", latest_parameters_path.name),
-            ("initial_pulse_npz", initial_pulse_npz_path.name),
-            ("initial_pulse_csv", initial_pulse_csv_path.name),
-            ("final_pulse_npz", final_pulse_npz_path.name),
-            ("final_pulse_csv", final_pulse_csv_path.name),
-            ("optimizer_method", "L-BFGS-B"),
-            ("optimizer_maximize", True),
-            ("optimizer_options", optimizer_options),
-        ],
-        results=[
-            ("single_state_fidelity", metrics["initial_fidelity"], metrics["final_fidelity"]),
-            (
-                "close_gate_fidelity",
-                metrics["initial_close_gate_fidelity"],
-                metrics["final_close_gate_fidelity"],
-            ),
-            (
-                "open_gate_fidelity",
-                metrics["initial_open_gate_fidelity"],
-                metrics["final_open_gate_fidelity"],
-            ),
-            ("l1_penalty", metrics["initial_l1_penalty"], metrics["final_l1_penalty"]),
-            ("l2_penalty", metrics["initial_l2_penalty"], metrics["final_l2_penalty"]),
-            (
-                "penalized_objective",
-                metrics["initial_penalized_objective"],
-                metrics["final_penalized_objective"],
-            ),
-        ],
-        optimizer=[
-            ("success", result.success),
-            ("message", result.message),
-            ("nit", getattr(result, "nit", "NA")),
-            ("nfev", getattr(result, "nfev", "NA")),
-        ],
-        figures=[
-            ("Pulse parameters", pulse_path),
-            ("State propagation", propagation_path),
-        ],
-        generated_at=generated_at,
-    )
-
     outputs = {
         "pulse_plot": pulse_path,
         "propagation_plot": propagation_path,
@@ -1021,6 +1413,17 @@ def run_perturbative_experiment(
         "final_pulse_npz": final_pulse_npz_path,
         "final_pulse_csv": final_pulse_csv_path,
     }
+    append_optimization_results_report(
+        report_path,
+        metrics=metrics,
+        result=result,
+        figures=[
+            ("Pulse parameters", pulse_path),
+            ("State propagation", propagation_path),
+        ],
+        outputs=outputs,
+        interrupted=interrupted,
+    )
     if print_report:
         print_experiment_report(args, result, metrics, outputs)
         print(f"experiment_dir={experiment_dir}")

@@ -27,6 +27,7 @@ from experiments.reporting import (
 )
 from quantum_control import (
     ControlProblem,
+    DEFAULT_LAMB_DICKE_ETA,
     EvolutionContext,
     GrapeDifferentiator,
     NominalUnitaryEvolution,
@@ -44,7 +45,7 @@ from quantum_control import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
-    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
 )
 from quantum_control.optimizers import ScipyOptimizer
 
@@ -77,8 +78,8 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
     sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
     number = number_operator(n_levels)
-    displacement = annihilation_operator(n_levels) + creation_operator(n_levels)
-    s_phi = two_qubit_spin_phase_difference(phi_s)
+    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
     return spin_boson_control_system(
         n_levels=n_levels,
@@ -89,7 +90,7 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
         ],
         control_fluctuations=[
             0.001 * np.kron(spin_identity, number),
-            0.005 * 0.5 * np.kron(s_phi, displacement),
+            0.005 * DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
         ],
     )
 
