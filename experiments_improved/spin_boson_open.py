@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,10 +60,199 @@ from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
 N_LEVELS = 6
 N_STEPS = 200
-MAXITER = 20
+MAXITER = 40
 RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
 DEFAULT_L1_SMOOTH_WEIGHT = 0.0005
 DEFAULT_L2_SMOOTH_WEIGHT = 0.0001
+
+
+@dataclass(frozen=True)
+class SystemConfig:
+    n_levels: int = N_LEVELS
+    phi_s: float = 0.0
+    eta: float = DEFAULT_LAMB_DICKE_ETA
+    include_fluctuations: bool = True
+
+
+@dataclass(frozen=True)
+class PulseConfig:
+    n_steps: int = N_STEPS
+    total_time_us: float = 225.8
+    alpha1_khz_bounds: tuple[float, float] = DEFAULT_ALPHA1_KHZ_BOUNDS
+    alpha2_khz_bounds: tuple[float, float] = DEFAULT_ALPHA2_KHZ_BOUNDS
+    random_seed: int | None = None
+
+
+@dataclass(frozen=True)
+class ObjectiveConfig:
+    max_order: int = 2
+    drop_odd_average: bool = True
+    normalize_weights: bool = False
+
+
+@dataclass(frozen=True)
+class OptimizerConfig:
+    method: str = "L-BFGS-B"
+    maxiter: int = MAXITER
+    gtol: float = 1e-12
+    ftol: float = 1e-15
+    maximize: bool = True
+
+    @property
+    def options(self):
+        return {"maxiter": self.maxiter, "gtol": self.gtol, "ftol": self.ftol}
+
+
+@dataclass(frozen=True)
+class PenaltyConfig:
+    l1_smooth_weight: float = DEFAULT_L1_SMOOTH_WEIGHT
+    l2_smooth_weight: float = DEFAULT_L2_SMOOTH_WEIGHT
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    workers: int = 1
+    print_step: bool = False
+    print_fidelity_terms: bool = False
+    save_fidelity_terms: bool | None = None
+    initial_pulse_npz: Path | None = None
+    no_progress: bool = False
+
+    @property
+    def should_save_fidelity_terms(self):
+        if self.save_fidelity_terms is None:
+            return self.print_fidelity_terms
+        return self.save_fidelity_terms
+
+
+@dataclass(frozen=True)
+class OutputConfig:
+    output_root: Path = field(default_factory=lambda: OUTPUT_DIR)
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    system: SystemConfig = field(default_factory=SystemConfig)
+    pulse: PulseConfig = field(default_factory=PulseConfig)
+    objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    penalty: PenaltyConfig = field(default_factory=PenaltyConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+
+    @property
+    def n_steps(self):
+        return self.pulse.n_steps
+
+    @property
+    def maxiter(self):
+        return self.optimizer.maxiter
+
+    @property
+    def l1_smooth_weight(self):
+        return self.penalty.l1_smooth_weight
+
+    @property
+    def l2_smooth_weight(self):
+        return self.penalty.l2_smooth_weight
+
+    @property
+    def workers(self):
+        return self.runtime.workers
+
+    @property
+    def print_step(self):
+        return self.runtime.print_step
+
+    @property
+    def print_fidelity_terms(self):
+        return self.runtime.print_fidelity_terms
+
+    @property
+    def save_fidelity_terms(self):
+        return self.runtime.save_fidelity_terms
+
+    @property
+    def initial_pulse_npz(self):
+        return self.runtime.initial_pulse_npz
+
+    @property
+    def no_progress(self):
+        return self.runtime.no_progress
+
+    @property
+    def output_root(self):
+        return self.output.output_root
+
+
+def default_experiment_config():
+    return ExperimentConfig()
+
+
+def no_fluctuation_experiment_config():
+    config = default_experiment_config()
+    return replace(
+        config,
+        system=replace(config.system, include_fluctuations=False),
+    )
+
+
+def _coerce_experiment_config(config):
+    if config is None:
+        return default_experiment_config()
+    if isinstance(config, ExperimentConfig):
+        return config
+
+    defaults = default_experiment_config()
+    return ExperimentConfig(
+        system=replace(
+            defaults.system,
+            include_fluctuations=bool(
+                getattr(config, "include_fluctuations", defaults.system.include_fluctuations)
+            ),
+        ),
+        pulse=replace(
+            defaults.pulse,
+            n_steps=int(getattr(config, "n_steps", defaults.pulse.n_steps)),
+        ),
+        objective=defaults.objective,
+        optimizer=replace(
+            defaults.optimizer,
+            maxiter=int(getattr(config, "maxiter", defaults.optimizer.maxiter)),
+        ),
+        penalty=replace(
+            defaults.penalty,
+            l1_smooth_weight=float(
+                getattr(config, "l1_smooth_weight", defaults.penalty.l1_smooth_weight)
+            ),
+            l2_smooth_weight=float(
+                getattr(config, "l2_smooth_weight", defaults.penalty.l2_smooth_weight)
+            ),
+        ),
+        runtime=replace(
+            defaults.runtime,
+            workers=int(getattr(config, "workers", defaults.runtime.workers)),
+            print_step=bool(getattr(config, "print_step", defaults.runtime.print_step)),
+            print_fidelity_terms=bool(
+                getattr(config, "print_fidelity_terms", defaults.runtime.print_fidelity_terms)
+            ),
+            save_fidelity_terms=getattr(
+                config,
+                "save_fidelity_terms",
+                defaults.runtime.save_fidelity_terms,
+            ),
+            initial_pulse_npz=getattr(
+                config,
+                "initial_pulse_npz",
+                defaults.runtime.initial_pulse_npz,
+            ),
+            no_progress=bool(getattr(config, "no_progress", defaults.runtime.no_progress)),
+        ),
+        output=replace(
+            defaults.output,
+            output_root=Path(getattr(config, "output_root", defaults.output.output_root)),
+        ),
+    )
 
 
 class OptimizationProgressBar:
@@ -107,17 +297,18 @@ def ms_bell_target_motion_ground(n_levels):
     return target
 
 
-def spin_boson_noisy_control_system(n_levels, phi_s):
-    specs = spin_boson_noise_term_specs(n_levels, phi_s)
+def spin_boson_noisy_control_system(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
+    specs = spin_boson_noise_term_specs(n_levels, phi_s, eta=eta)
     return spin_boson_control_system(
         n_levels=n_levels,
         phi_s=phi_s,
+        eta=eta,
         static_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "static"],
         control_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "control"],
     )
 
 
-def spin_boson_noise_term_specs(n_levels, phi_s):
+def spin_boson_noise_term_specs(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
     spin_identity = np.eye(4, dtype=complex)
     motion_identity = np.eye(n_levels, dtype=complex)
     single_identity = np.eye(2, dtype=complex)
@@ -156,8 +347,8 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
             kind="control",
             name="control[1]",
             coefficient=0.0001,
-            operator=DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
-            definition="eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta=0.075",
+            operator=eta * np.kron(s_phi, x1),
+            definition=f"eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta={eta:.12g}",
             usage="alpha2(t) * control[1]",
         ),
     ]
@@ -210,27 +401,27 @@ class Alpha2EndpointZeroParameterization:
         return (0.0 - 0.5 * (upper + lower)) / (0.5 * (upper - lower))
 
 
-def parse_args():
+def parse_args(argv=None):
+    defaults = default_experiment_config()
     parser = argparse.ArgumentParser(
         description="Run spin-boson perturbative open-gate L-BFGS-B experiment."
     )
-    parser.add_argument("--maxiter", type=int, default=MAXITER)
-    parser.add_argument("--n-steps", type=int, default=N_STEPS)
-    parser.add_argument("--alpha1-cycles", type=float, default=1.0)
+    parser.add_argument("--maxiter", type=int, default=defaults.optimizer.maxiter)
+    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
     parser.add_argument(
         "--l1-smooth-weight",
         type=float,
-        default=DEFAULT_L1_SMOOTH_WEIGHT,
+        default=defaults.penalty.l1_smooth_weight,
     )
     parser.add_argument(
         "--l2-smooth-weight",
         type=float,
-        default=DEFAULT_L2_SMOOTH_WEIGHT,
+        default=defaults.penalty.l2_smooth_weight,
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
+        default=defaults.runtime.workers,
         help="Number of worker processes for perturbative state-pair averaging.",
     )
     parser.add_argument(
@@ -254,7 +445,65 @@ def parse_args():
         action="store_true",
         help="Disable the optimization progress bar.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--close-grape",
+        action="store_true",
+        help="Run optimization without fluctuation terms.",
+    )
+    args = parser.parse_args(argv)
+    return replace(
+        defaults,
+        system=replace(
+            defaults.system,
+            include_fluctuations=not args.close_grape,
+        ),
+        pulse=replace(defaults.pulse, n_steps=args.n_steps),
+        optimizer=replace(defaults.optimizer, maxiter=args.maxiter),
+        penalty=replace(
+            defaults.penalty,
+            l1_smooth_weight=args.l1_smooth_weight,
+            l2_smooth_weight=args.l2_smooth_weight,
+        ),
+        runtime=replace(
+            defaults.runtime,
+            workers=args.workers,
+            print_step=args.print_step,
+            print_fidelity_terms=args.print_fidelity_terms,
+            initial_pulse_npz=args.initial_pulse_npz,
+            no_progress=args.no_progress,
+        ),
+    )
+
+
+def parse_evaluate_args(argv=None):
+    defaults = default_experiment_config()
+    parser = argparse.ArgumentParser(
+        description="Evaluate a spin-boson pulse without running optimization."
+    )
+    parser.add_argument(
+        "--pulse-npz",
+        type=Path,
+        default=None,
+        help="Pulse .npz to evaluate. If omitted, evaluate the configured initial pulse.",
+    )
+    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=defaults.runtime.workers,
+        help="Number of worker processes for open-gate fidelity.",
+    )
+    args = parser.parse_args(argv)
+    return replace(
+        defaults,
+        pulse=replace(defaults.pulse, n_steps=args.n_steps),
+        runtime=replace(
+            defaults.runtime,
+            workers=args.workers,
+            initial_pulse_npz=args.pulse_npz,
+            no_progress=True,
+        ),
+    )
 
 
 class CombinedCallback:
@@ -366,17 +615,17 @@ def plot_population_marginals(
     plt.close(fig)
 
 
-def format_experiment_note(args, result, metrics):
+def format_experiment_note(config, result, metrics):
     return "\n".join(
         [
             "objective=open_gate_fidelity_expansion, target=MS_XX(pi/2)",
             (
-                f"n_steps={args.n_steps}, maxiter={args.maxiter}, "
-                f"workers={args.workers}, alpha1_cycles={args.alpha1_cycles:.6g}"
+                f"n_steps={config.pulse.n_steps}, maxiter={config.optimizer.maxiter}, "
+                f"workers={config.runtime.workers}"
             ),
             (
-                f"smooth: l1={args.l1_smooth_weight:.6g}, "
-                f"l2={args.l2_smooth_weight:.6g}"
+                f"smooth: l1={config.penalty.l1_smooth_weight:.6g}, "
+                f"l2={config.penalty.l2_smooth_weight:.6g}"
             ),
             (
                 f"open gate: {metrics['initial_open_gate_fidelity']:.6g} -> "
@@ -406,20 +655,20 @@ def format_value(value):
     return str(value)
 
 
-def print_experiment_report(args, result, metrics, outputs):
+def print_experiment_report(config, result, metrics, outputs):
     print("\n=== Perturbative Open-Gate Optimization ===")
     print_section(
         "Configuration",
         [
             ("objective", "open_gate_fidelity_expansion"),
             ("target_gate", "MS_XX(pi/2)"),
-            ("n_levels", N_LEVELS),
-            ("n_steps", args.n_steps),
-            ("maxiter", args.maxiter),
-            ("workers", args.workers),
-            ("alpha1_cycles", format_value(args.alpha1_cycles)),
-            ("l1_smooth_weight", format_value(args.l1_smooth_weight)),
-            ("l2_smooth_weight", format_value(args.l2_smooth_weight)),
+            ("n_levels", config.system.n_levels),
+            ("include_fluctuations", config.system.include_fluctuations),
+            ("n_steps", config.pulse.n_steps),
+            ("maxiter", config.optimizer.maxiter),
+            ("workers", config.runtime.workers),
+            ("l1_smooth_weight", format_value(config.penalty.l1_smooth_weight)),
+            ("l2_smooth_weight", format_value(config.penalty.l2_smooth_weight)),
         ],
     )
     print_section(
@@ -497,12 +746,11 @@ def write_optimization_preview_report(
     *,
     generated_at,
     experiment_dir,
-    args,
+    config,
     initial_pulse,
     parameterization,
     noisy_system,
     noise_specs,
-    phi_s,
     state_pairs,
     optimizer_options,
     output_manifest,
@@ -533,29 +781,29 @@ def write_optimization_preview_report(
                 ("objective", "open_gate_fidelity_expansion"),
                 ("target_state", "(|00,0>-i|11,0>)/sqrt(2)"),
                 ("target_gate", "MS_XX(pi/2)"),
-                ("n_levels", N_LEVELS),
-                ("n_steps", args.n_steps),
+                ("n_levels", config.system.n_levels),
+                ("n_steps", config.pulse.n_steps),
                 ("dt_s", initial_pulse.dt),
                 ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
-                ("phi_s", phi_s),
-                ("eta", DEFAULT_LAMB_DICKE_ETA),
-                ("alpha1_cycles", args.alpha1_cycles),
+                ("phi_s", config.system.phi_s),
+                ("eta", config.system.eta),
+                ("include_fluctuations", config.system.include_fluctuations),
                 ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
                 ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
                 ("alpha2_endpoint_constraint", "initial and final alpha2 fixed to 0"),
                 ("static_fluctuation_count", len(noisy_system.static_fluctuations)),
                 ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
-                ("max_order", 2),
-                ("drop_odd_average", True),
-                ("workers", args.workers),
-                ("normalize_weights", False),
-                ("no_progress", args.no_progress),
-                ("print_step", args.print_step),
-                ("print_fidelity_terms", getattr(args, "print_fidelity_terms", False)),
+                ("max_order", config.objective.max_order),
+                ("drop_odd_average", config.objective.drop_odd_average),
+                ("workers", config.runtime.workers),
+                ("normalize_weights", config.objective.normalize_weights),
+                ("no_progress", config.runtime.no_progress),
+                ("print_step", config.runtime.print_step),
+                ("print_fidelity_terms", config.runtime.print_fidelity_terms),
                 ("save_fidelity_terms", save_fidelity_terms),
                 ("state_pair_count", len(state_pairs)),
-                ("l1_smooth_weight", args.l1_smooth_weight),
-                ("l2_smooth_weight", args.l2_smooth_weight),
+                ("l1_smooth_weight", config.penalty.l1_smooth_weight),
+                ("l2_smooth_weight", config.penalty.l2_smooth_weight),
                 *custom_initial_configuration(custom_initial_metadata),
                 *extra_configuration,
             ],
@@ -566,8 +814,8 @@ def write_optimization_preview_report(
         _markdown_table(
             ("Parameter", "Value"),
             [
-                ("optimizer_method", "L-BFGS-B"),
-                ("optimizer_maximize", True),
+                ("optimizer_method", config.optimizer.method),
+                ("optimizer_maximize", config.optimizer.maximize),
                 ("optimizer_options", optimizer_options),
             ],
         ),
@@ -603,7 +851,7 @@ def write_optimization_preview_report(
         "## System Construction Script",
         "",
         "```python",
-        render_system_construction_script(args, optimizer_options),
+        render_system_construction_script(config, optimizer_options),
         "```",
         "",
         "## Results",
@@ -714,9 +962,14 @@ def calculate_kappa_metrics(system, noisy_system, pulse, parameterization):
     ).reshape(len(channel_bounds), -1).T
     nominal_norms = []
     fluctuation_norms = []
+    has_fluctuations = bool(noisy_system.static_fluctuations or noisy_system.control_fluctuations)
     for controls in boundary_controls:
         nominal_norms.append(float(np.linalg.norm(system.nominal_hamiltonian(controls), ord=2)))
-        fluctuation_norms.append(float(np.linalg.norm(noisy_system.fluctuation_hamiltonian(controls), ord=2)))
+        fluctuation_norms.append(
+            float(np.linalg.norm(noisy_system.fluctuation_hamiltonian(controls), ord=2))
+            if has_fluctuations
+            else 0.0
+        )
     nominal_norms = np.asarray(nominal_norms, dtype=float)
     fluctuation_norms = np.asarray(fluctuation_norms, dtype=float)
     kappa_1_corner = int(np.argmax(nominal_norms)) if nominal_norms.size else 0
@@ -761,20 +1014,26 @@ def kappa_report_rows(metrics):
     ]
 
 
-def render_system_construction_script(args, optimizer_options):
+def render_system_construction_script(config, optimizer_options):
     return "\n".join(
         [
-            "phi_s = 0.0",
-            f"eta = {DEFAULT_LAMB_DICKE_ETA!r}",
-            f"system = spin_boson_control_system(n_levels={N_LEVELS}, phi_s=phi_s, eta=eta)",
-            f"noisy_system = spin_boson_noisy_control_system(n_levels={N_LEVELS}, phi_s=phi_s)",
-            f"alpha1_khz_bounds = {DEFAULT_ALPHA1_KHZ_BOUNDS!r}",
-            f"alpha2_khz_bounds = {DEFAULT_ALPHA2_KHZ_BOUNDS!r}",
+            f"n_levels = {config.system.n_levels!r}",
+            f"phi_s = {config.system.phi_s!r}",
+            f"eta = {config.system.eta!r}",
+            f"include_fluctuations = {config.system.include_fluctuations!r}",
+            "system = spin_boson_control_system(n_levels=n_levels, phi_s=phi_s, eta=eta)",
+            "if include_fluctuations:",
+            "    noisy_system = spin_boson_noisy_control_system(n_levels=n_levels, phi_s=phi_s, eta=eta)",
+            "else:",
+            "    noisy_system = spin_boson_control_system(n_levels=n_levels, phi_s=phi_s, eta=eta)",
+            f"alpha1_khz_bounds = {config.pulse.alpha1_khz_bounds!r}",
+            f"alpha2_khz_bounds = {config.pulse.alpha2_khz_bounds!r}",
             "initial_pulse = _customized_initial_pulse(",
-            f"    n_steps={args.n_steps},",
+            f"    n_steps={config.pulse.n_steps},",
+            f"    total_time_us={config.pulse.total_time_us!r},",
             "    alpha1_khz_bounds=alpha1_khz_bounds,",
             "    alpha2_khz_bounds=alpha2_khz_bounds,",
-            f"    alpha1_cycles={args.alpha1_cycles!r},",
+            f"    random_seed={config.pulse.random_seed!r},",
             ")",
             "parameterization = Alpha2EndpointZeroParameterization(",
             "    spin_boson_parameterization(",
@@ -784,46 +1043,50 @@ def render_system_construction_script(args, optimizer_options):
             "    )",
             ")",
             "target_gate = ms_xx_pi_over_2_gate()",
-            f"state_pairs = motion_resolved_gate_state_pairs(target_gate, {N_LEVELS})",
+            "state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)",
             "step_builder = PerturbativeStepBuilder()",
-            "expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)",
+            (
+                "expansion_objective = ExpansionFidelity("
+                f"max_order={config.objective.max_order!r}, "
+                f"drop_odd_average={config.objective.drop_odd_average!r})"
+            ),
             "optimization_problem = ExpansionStateAverageFidelity(",
             "    system=noisy_system,",
             "    pulse=initial_pulse,",
-            "    evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),",
+            f"    evolution=PerturbativeExpansionEvolution(step_builder, max_order={config.objective.max_order!r}),",
             "    objective=expansion_objective,",
             "    differentiator=PerturbativeExpansionDifferentiator(step_builder, expansion_objective),",
             "    state_pairs=state_pairs,",
-            "    normalize_weights=False,",
-            f"    n_workers={args.workers},",
+            f"    normalize_weights={config.objective.normalize_weights!r},",
+            f"    n_workers={config.runtime.workers},",
             ")",
             "parameterized_problem = ParameterizedControlProblem(optimization_problem, parameterization)",
             "penalty = ParameterSmoothPenalty(",
-            f"    l1_weight={args.l1_smooth_weight!r},",
-            f"    l2_weight={args.l2_smooth_weight!r},",
+            f"    l1_weight={config.penalty.l1_smooth_weight!r},",
+            f"    l2_weight={config.penalty.l2_smooth_weight!r},",
             ")",
             "penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)",
             "optimizer = ScipyOptimizer(",
-            "    method='L-BFGS-B',",
-            "    maximize=True,",
+            f"    method={config.optimizer.method!r},",
+            f"    maximize={config.optimizer.maximize!r},",
             f"    options={optimizer_options!r},",
             ")",
         ]
     )
 
 
-def print_optimization_preview(report_path, args, initial_metrics, kappa_metrics):
+def print_optimization_preview(report_path, config, initial_metrics, kappa_metrics):
     print("\n=== Optimization Preview ===")
     print_section(
         "Configuration",
         [
-            ("n_levels", N_LEVELS),
-            ("n_steps", args.n_steps),
-            ("maxiter", args.maxiter),
-            ("workers", args.workers),
-            ("alpha1_cycles", format_value(args.alpha1_cycles)),
-            ("l1_smooth_weight", format_value(args.l1_smooth_weight)),
-            ("l2_smooth_weight", format_value(args.l2_smooth_weight)),
+            ("n_levels", config.system.n_levels),
+            ("include_fluctuations", config.system.include_fluctuations),
+            ("n_steps", config.pulse.n_steps),
+            ("maxiter", config.optimizer.maxiter),
+            ("workers", config.runtime.workers),
+            ("l1_smooth_weight", format_value(config.penalty.l1_smooth_weight)),
+            ("l2_smooth_weight", format_value(config.penalty.l2_smooth_weight)),
         ],
     )
     print_section("Initial Metrics", [(name, format_value(value)) for name, value in initial_metrics])
@@ -872,24 +1135,26 @@ def _customized_initial_pulse(
     total_time_us=225.8,
     alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
     alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
-    alpha1_cycles=1.0,
+    random_seed=None,
 ):
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1.")
     total_time = float(total_time_us) * 1e-6
     if total_time <= 0.0:
         raise ValueError("total_time_us must be positive.")
-    if alpha1_cycles <= 0.0:
-        raise ValueError("alpha1_cycles must be positive.")
 
     alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
     alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
     dt = total_time / n_steps
-    normalized_time = (np.arange(n_steps, dtype=float) + 0.5) / n_steps
 
     alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
     alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * np.random.randn(n_steps)
+    alpha1_noise = (
+        np.random.randn(n_steps)
+        if random_seed is None
+        else np.random.default_rng(random_seed).standard_normal(n_steps)
+    )
+    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * alpha1_noise
     alpha1 = np.clip(alpha1, alpha1_lower, alpha1_upper)
     alpha2 = alpha2_upper * np.ones(n_steps, dtype=float)
 
@@ -947,10 +1212,10 @@ def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, 
     }
 
 
-def perturbative_fidelity_terms(system, pulse, target_gate, n_levels):
+def perturbative_fidelity_terms(system, pulse, target_gate, n_levels, max_order=2, drop_odd_average=True):
     step_builder = PerturbativeStepBuilder()
-    objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
-    evolution = PerturbativeExpansionEvolution(step_builder, max_order=2)
+    objective = ExpansionFidelity(max_order=max_order, drop_odd_average=drop_odd_average)
+    evolution = PerturbativeExpansionEvolution(step_builder, max_order=max_order)
     pair_rows = []
     for pair_index, pair in enumerate(motion_resolved_gate_state_pairs(target_gate, n_levels)):
         context = EvolutionContext(
@@ -1002,69 +1267,119 @@ def perturbative_fidelity_terms(system, pulse, target_gate, n_levels):
     return summary, pair_rows
 
 
-def run_perturbative_experiment(
-    args,
-    initial_parameters=None,
-    run_label=None,
-    output_root=OUTPUT_DIR,
-    experiment_dir=None,
-    generated_at=None,
-    extra_configuration=(),
-    print_report=True,
-):
-    phi_s = 0.0
-    system = spin_boson_control_system(n_levels=N_LEVELS, phi_s=phi_s)
-    noise_specs = spin_boson_noise_term_specs(n_levels=N_LEVELS, phi_s=phi_s)
-    noisy_system = spin_boson_noisy_control_system(n_levels=N_LEVELS, phi_s=phi_s)
-
-
-    initial_pulse = _customized_initial_pulse(
-        n_steps=args.n_steps,
-        alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
-        alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
-        alpha1_cycles=args.alpha1_cycles,
+def build_systems(config):
+    system = spin_boson_control_system(
+        n_levels=config.system.n_levels,
+        phi_s=config.system.phi_s,
+        eta=config.system.eta,
     )
-    parameterization = Alpha2EndpointZeroParameterization(
+    if not config.system.include_fluctuations:
+        noisy_system = spin_boson_control_system(
+            n_levels=config.system.n_levels,
+            phi_s=config.system.phi_s,
+            eta=config.system.eta,
+        )
+        return system, noisy_system, []
+
+    noise_specs = spin_boson_noise_term_specs(
+        n_levels=config.system.n_levels,
+        phi_s=config.system.phi_s,
+        eta=config.system.eta,
+    )
+    noisy_system = spin_boson_noisy_control_system(
+        n_levels=config.system.n_levels,
+        phi_s=config.system.phi_s,
+        eta=config.system.eta,
+    )
+    return system, noisy_system, noise_specs
+
+
+def build_initial_pulse(config):
+    return _customized_initial_pulse(
+        n_steps=config.pulse.n_steps,
+        total_time_us=config.pulse.total_time_us,
+        alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
+        alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
+        random_seed=config.pulse.random_seed,
+    )
+
+
+def build_parameterization(config, pulse):
+    return Alpha2EndpointZeroParameterization(
         spin_boson_parameterization(
-            initial_pulse.n_steps,
-            alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
-            alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
+            pulse.n_steps,
+            alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
+            alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
         )
     )
-    custom_initial_metadata = None
-    if initial_parameters is None and getattr(args, "initial_pulse_npz", None) is not None:
-        initial_parameters, custom_initial_metadata = load_custom_initial_parameters(
-            args.initial_pulse_npz,
-            initial_pulse,
-            parameterization,
-        )
-        for warning in custom_initial_metadata["warnings"]:
-            print(warning, file=sys.stderr, flush=True)
-    target_gate = ms_xx_pi_over_2_gate()
-    state_pairs = motion_resolved_gate_state_pairs(target_gate, N_LEVELS)
 
+
+def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
     step_builder = PerturbativeStepBuilder()
-    expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
-    optimization_problem = ExpansionStateAverageFidelity(
+    expansion_objective = ExpansionFidelity(
+        max_order=config.objective.max_order,
+        drop_odd_average=config.objective.drop_odd_average,
+    )
+    return ExpansionStateAverageFidelity(
         system=noisy_system,
         pulse=initial_pulse,
-        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        evolution=PerturbativeExpansionEvolution(
+            step_builder,
+            max_order=config.objective.max_order,
+        ),
         objective=expansion_objective,
         differentiator=PerturbativeExpansionDifferentiator(
             step_builder,
             expansion_objective,
         ),
         state_pairs=state_pairs,
-        normalize_weights=False,
-        n_workers=args.workers,
+        normalize_weights=config.objective.normalize_weights,
+        n_workers=config.runtime.workers,
     )
+
+
+def build_optimizer(config):
+    return ScipyOptimizer(
+        method=config.optimizer.method,
+        maximize=config.optimizer.maximize,
+        options=config.optimizer.options,
+    )
+
+
+def run_perturbative_experiment(
+    config=None,
+    initial_parameters=None,
+    run_label=None,
+    output_root=None,
+    experiment_dir=None,
+    generated_at=None,
+    extra_configuration=(),
+    print_report=True,
+):
+    config = _coerce_experiment_config(config)
+    n_levels = config.system.n_levels
+    system, noisy_system, noise_specs = build_systems(config)
+    initial_pulse = build_initial_pulse(config)
+    parameterization = build_parameterization(config, initial_pulse)
+    custom_initial_metadata = None
+    if initial_parameters is None and config.runtime.initial_pulse_npz is not None:
+        initial_parameters, custom_initial_metadata = load_custom_initial_parameters(
+            config.runtime.initial_pulse_npz,
+            initial_pulse,
+            parameterization,
+        )
+        for warning in custom_initial_metadata["warnings"]:
+            print(warning, file=sys.stderr, flush=True)
+    target_gate = ms_xx_pi_over_2_gate()
+    state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+    optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
         parameterization,
     )
     penalty = ParameterSmoothPenalty(
-        l1_weight=args.l1_smooth_weight,
-        l2_weight=args.l2_smooth_weight,
+        l1_weight=config.penalty.l1_smooth_weight,
+        l2_weight=config.penalty.l2_smooth_weight,
     )
     penalized_problem = PenalizedParameterizedProblem(parameterized_problem, penalty)
     initial_parameters = (
@@ -1085,6 +1400,7 @@ def run_perturbative_experiment(
     )
     masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
     generated_at = generated_at or datetime.now()
+    output_root = Path(output_root) if output_root is not None else config.output.output_root
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         output_root,
         run_label or "spin_boson_perturbative",
@@ -1092,16 +1408,12 @@ def run_perturbative_experiment(
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
-    optimizer_options = {"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15}
-    optimizer = ScipyOptimizer(
-        method="L-BFGS-B",
-        maximize=True,
-        options=optimizer_options,
-    )
+    optimizer_options = config.optimizer.options
+    optimizer = build_optimizer(config)
     progress = (
         None
-        if args.no_progress or args.print_step
-        else OptimizationProgressBar(args.maxiter)
+        if config.runtime.no_progress or config.runtime.print_step
+        else OptimizationProgressBar(config.optimizer.maxiter)
     )
     step_log_path = experiment_dir / "step_log.csv"
     fidelity_terms_path = experiment_dir / "fidelity_terms.csv"
@@ -1113,17 +1425,13 @@ def run_perturbative_experiment(
     initial_pulse_stem = experiment_dir / "initial_pulse"
     final_pulse_stem = experiment_dir / "final_pulse"
     report_path = experiment_dir / "report.md"
-    step_log = StepLog(step_log_path, print_steps=args.print_step)
-    save_fidelity_terms = getattr(
-        args,
-        "save_fidelity_terms",
-        getattr(args, "print_fidelity_terms", False),
-    )
+    step_log = StepLog(step_log_path, print_steps=config.runtime.print_step)
+    save_fidelity_terms = config.runtime.should_save_fidelity_terms
     fidelity_terms_log = (
         FidelityTermsLog(
             fidelity_terms_path,
             fidelity_pair_terms_path,
-            print_steps=getattr(args, "print_fidelity_terms", False),
+            print_steps=config.runtime.print_fidelity_terms,
         )
         if save_fidelity_terms
         else None
@@ -1139,7 +1447,7 @@ def run_perturbative_experiment(
         ("initial_raw_fidelity", penalized_problem.raw_value(initial_parameters)),
         (
             "initial_close_gate_fidelity",
-            closed_gate_fidelity(system, masked_initial_pulse, target_gate, N_LEVELS),
+            closed_gate_fidelity(system, masked_initial_pulse, target_gate, n_levels),
         ),
         (
             "initial_open_gate_fidelity",
@@ -1147,8 +1455,8 @@ def run_perturbative_experiment(
                 noisy_system,
                 masked_initial_pulse,
                 target_gate,
-                N_LEVELS,
-                n_workers=args.workers,
+                n_levels,
+                n_workers=config.runtime.workers,
             ),
         ),
         ("initial_l1_penalty", initial_l1_penalty),
@@ -1176,12 +1484,11 @@ def run_perturbative_experiment(
         report_path,
         generated_at=generated_at,
         experiment_dir=experiment_dir,
-        args=args,
+        config=config,
         initial_pulse=initial_pulse,
         parameterization=parameterization,
         noisy_system=noisy_system,
         noise_specs=noise_specs,
-        phi_s=phi_s,
         state_pairs=state_pairs,
         optimizer_options=optimizer_options,
         output_manifest=output_manifest,
@@ -1191,8 +1498,8 @@ def run_perturbative_experiment(
         extra_configuration=extra_configuration,
         save_fidelity_terms=save_fidelity_terms,
     )
-    if print_report or args.print_step or getattr(args, "print_fidelity_terms", False):
-        print_optimization_preview(report_path, args, initial_preview_metrics, kappa_metrics)
+    if print_report or config.runtime.print_step or config.runtime.print_fidelity_terms:
+        print_optimization_preview(report_path, config, initial_preview_metrics, kappa_metrics)
 
     def record_step(step, parameters):
         pulse = penalized_problem.pulse_from_parameters(parameters)
@@ -1200,13 +1507,13 @@ def run_perturbative_experiment(
         l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
         step_log.append(
             step=step,
-            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, N_LEVELS),
+            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, n_levels),
             open_fidelity=open_gate_fidelity(
                 noisy_system,
                 pulse,
                 target_gate,
-                N_LEVELS,
-                n_workers=args.workers,
+                n_levels,
+                n_workers=config.runtime.workers,
             ),
             cost_function=penalized_problem.value(parameters),
             raw_fidelity=penalized_problem.raw_value(parameters),
@@ -1219,7 +1526,9 @@ def run_perturbative_experiment(
                 noisy_system,
                 pulse,
                 target_gate,
-                N_LEVELS,
+                n_levels,
+                max_order=config.objective.max_order,
+                drop_odd_average=config.objective.drop_odd_average,
             )
             fidelity_summary["step"] = int(step)
             for row in fidelity_pair_rows:
@@ -1306,27 +1615,27 @@ def run_perturbative_experiment(
         system,
         masked_initial_pulse,
         target_gate,
-        N_LEVELS,
+        n_levels,
     )
     final_close_gate_fidelity = closed_gate_fidelity(
         system,
         final_pulse,
         target_gate,
-        N_LEVELS,
+        n_levels,
     )
     initial_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         masked_initial_pulse,
         target_gate,
-        N_LEVELS,
-        n_workers=args.workers,
+        n_levels,
+        n_workers=config.runtime.workers,
     )
     final_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         final_pulse,
         target_gate,
-        N_LEVELS,
-        n_workers=args.workers,
+        n_levels,
+        n_workers=config.runtime.workers,
     )
 
     lower, upper = parameterization.base._bounds_for(final_pulse.amplitudes.shape)
@@ -1336,10 +1645,10 @@ def run_perturbative_experiment(
     ):
         raise RuntimeError("Optimized pulse violates amplitude bounds.")
 
-    dimension = 4 * N_LEVELS
+    dimension = 4 * n_levels
     context = EvolutionContext(
         initial_state=basis_state(0, dimension),
-        target_state=ms_bell_target_motion_ground(N_LEVELS),
+        target_state=ms_bell_target_motion_ground(n_levels),
     )
     nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
     initial_single_state_fidelity = StateTransferFidelity(context.target_state).evaluate(
@@ -1382,13 +1691,13 @@ def run_perturbative_experiment(
         "initial_penalized_objective": initial_objective,
         "final_penalized_objective": final_objective,
     }
-    experiment_note = format_experiment_note(args, result, metrics)
+    experiment_note = format_experiment_note(config, result, metrics)
     plot_pulses(time_us, masked_initial_pulse, final_pulse, pulse_path, note=experiment_note)
     plot_population_marginals(
         time_edges_us,
         initial_states,
         final_states,
-        N_LEVELS,
+        n_levels,
         propagation_path,
         note=experiment_note,
     )
@@ -1438,7 +1747,7 @@ def run_perturbative_experiment(
         interrupted=interrupted,
     )
     if print_report:
-        print_experiment_report(args, result, metrics, outputs)
+        print_experiment_report(config, result, metrics, outputs)
         print(f"experiment_dir={experiment_dir}")
         print(f"step_log={step_log_path}")
         if save_fidelity_terms:
@@ -1454,7 +1763,8 @@ def run_perturbative_experiment(
         print(f"markdown_report={report_path}")
 
     return {
-        "args": args,
+        "args": config,
+        "config": config,
         "result": result,
         "metrics": metrics,
         "outputs": outputs,
@@ -1480,8 +1790,184 @@ def custom_initial_configuration(metadata):
     )
 
 
+def write_evaluation_report(
+    report_path,
+    *,
+    generated_at,
+    experiment_dir,
+    config,
+    pulse_source,
+    metrics,
+    outputs,
+    custom_initial_metadata,
+):
+    lines = [
+        "# Spin-Boson Pulse Evaluation",
+        "",
+        f"Generated at: {generated_at.isoformat(timespec='seconds')}",
+        "",
+        "## Configuration",
+        "",
+        _markdown_table(
+            ("Parameter", "Value"),
+            [
+                ("experiment_dir", experiment_dir),
+                ("pulse_source", pulse_source),
+                ("n_levels", config.system.n_levels),
+                ("n_steps", config.pulse.n_steps),
+                ("phi_s", config.system.phi_s),
+                ("eta", config.system.eta),
+                ("include_fluctuations", config.system.include_fluctuations),
+                ("workers", config.runtime.workers),
+                *custom_initial_configuration(custom_initial_metadata),
+            ],
+        ),
+        "",
+        "## Metrics",
+        "",
+        _markdown_table(("Metric", "Value"), metrics.items()),
+        "",
+        "## Outputs",
+        "",
+        _markdown_table(("Output", "Path"), outputs.items()),
+        "",
+        "## Figures",
+        "",
+        f"![State propagation]({Path(outputs['propagation_plot']).name})",
+        "",
+    ]
+    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return report_path
+
+
+def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True):
+    config = _coerce_experiment_config(config)
+    n_levels = config.system.n_levels
+    system, noisy_system, _noise_specs = build_systems(config)
+    reference_pulse = build_initial_pulse(config)
+    parameterization = build_parameterization(config, reference_pulse)
+    custom_initial_metadata = None
+
+    if config.runtime.initial_pulse_npz is None:
+        pulse_source = "initial_pulse"
+        parameters = parameterization.to_parameters(reference_pulse.amplitudes)
+    else:
+        pulse_source = str(config.runtime.initial_pulse_npz)
+        parameters, custom_initial_metadata = load_custom_initial_parameters(
+            config.runtime.initial_pulse_npz,
+            reference_pulse,
+            parameterization,
+        )
+        for warning in custom_initial_metadata["warnings"]:
+            print(warning, file=sys.stderr, flush=True)
+
+    evaluated_pulse = PiecewiseConstantPulse(
+        amplitudes=parameterization.to_physical(parameters),
+        dt=reference_pulse.dt,
+    )
+    reference_parameters = parameterization.to_parameters(reference_pulse.amplitudes)
+    masked_reference_pulse = PiecewiseConstantPulse(
+        amplitudes=parameterization.to_physical(reference_parameters),
+        dt=reference_pulse.dt,
+    )
+
+    target_gate = ms_xx_pi_over_2_gate()
+    close_fidelity = closed_gate_fidelity(system, evaluated_pulse, target_gate, n_levels)
+    open_fidelity = open_gate_fidelity(
+        noisy_system,
+        evaluated_pulse,
+        target_gate,
+        n_levels,
+        n_workers=config.runtime.workers,
+    )
+    dimension = 4 * n_levels
+    context = EvolutionContext(
+        initial_state=basis_state(0, dimension),
+        target_state=ms_bell_target_motion_ground(n_levels),
+    )
+    nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
+    state_fidelity = StateTransferFidelity(context.target_state).evaluate(
+        nominal_evolution.evolve(system, evaluated_pulse, context)
+    )
+    reference_states = propagate_states(nominal_evolution, system, masked_reference_pulse, context)
+    evaluated_states = propagate_states(nominal_evolution, system, evaluated_pulse, context)
+    if not np.allclose(np.sum(np.abs(evaluated_states) ** 2, axis=1), 1.0, atol=1e-8):
+        raise RuntimeError("Evaluation propagation populations are not normalized.")
+
+    generated_at = generated_at or datetime.now()
+    experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
+        config.output.output_root,
+        "spin_boson_evaluation",
+        generated_at,
+    )
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    pulse_stem = experiment_dir / "evaluated_pulse"
+    pulse_npz_path, pulse_csv_path = export_pulse_controls(
+        evaluated_pulse,
+        pulse_stem,
+        RAD_S_PER_KHZ,
+    )
+    propagation_path = experiment_dir / "eva_state_propagation.png"
+    report_path = experiment_dir / "eva_report.md"
+    time_edges_us = np.arange(evaluated_pulse.n_steps + 1) * evaluated_pulse.dt * 1e6
+    plot_population_marginals(
+        time_edges_us,
+        reference_states,
+        evaluated_states,
+        n_levels,
+        propagation_path,
+        note=f"pulse_source={Path(pulse_source).name if pulse_source != 'initial_pulse' else pulse_source}",
+    )
+
+    metrics = {
+        "state_fidelity": state_fidelity,
+        "close_gate_fidelity": close_fidelity,
+        "open_gate_fidelity": open_fidelity,
+    }
+    outputs = {
+        "evaluated_pulse_npz": pulse_npz_path,
+        "evaluated_pulse_csv": pulse_csv_path,
+        "propagation_plot": propagation_path,
+        "eva_report": report_path,
+    }
+    write_evaluation_report(
+        report_path,
+        generated_at=generated_at,
+        experiment_dir=experiment_dir,
+        config=config,
+        pulse_source=pulse_source,
+        metrics=metrics,
+        outputs=outputs,
+        custom_initial_metadata=custom_initial_metadata,
+    )
+    for path in outputs.values():
+        if not path.exists() or path.stat().st_size == 0:
+            raise RuntimeError(f"Expected non-empty evaluation output at {path}.")
+    if print_report:
+        print("\n=== Spin-Boson Pulse Evaluation ===")
+        print_section("Metrics", [(name, format_value(value)) for name, value in metrics.items()])
+        print(f"experiment_dir={experiment_dir}")
+        print(f"evaluated_pulse_npz={pulse_npz_path}")
+        print(f"evaluated_pulse_csv={pulse_csv_path}")
+        print(f"propagation_plot={propagation_path}")
+        print(f"eva_report={report_path}")
+
+    return {
+        "config": config,
+        "metrics": metrics,
+        "outputs": outputs,
+        "experiment_dir": experiment_dir,
+        "report_path": report_path,
+        "pulse": evaluated_pulse,
+        "custom_initial_metadata": custom_initial_metadata,
+    }
+
+
 def main():
-    run_perturbative_experiment(parse_args())
+    if len(sys.argv) > 1 and sys.argv[1] == "evaluate":
+        evaluate_pulse(parse_evaluate_args(sys.argv[2:]))
+    else:
+        run_perturbative_experiment(parse_args())
 
 
 if __name__ == "__main__":
