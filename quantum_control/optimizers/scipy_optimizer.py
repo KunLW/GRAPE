@@ -80,6 +80,7 @@ class ScipyOptimizer:
             constraints=constraints,
             callback=callback,
             options=self.options,
+            tol=1e-15
         )
         result.optimized_pulse = problem.pulse_from_parameters(result.x)
         return result

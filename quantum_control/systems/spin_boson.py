@@ -6,6 +6,10 @@ from quantum_control.pulses.parameterization import BoundedAmplitudeParameteriza
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems.closed_system import FluctuatingClosedSystem
 
+DEFAULT_LAMB_DICKE_ETA = 0.075
+DEFAULT_ALPHA1_KHZ_BOUNDS = (1.0, 60.0)
+DEFAULT_ALPHA2_KHZ_BOUNDS = (0.0, 200.0)
+
 
 def annihilation_operator(n_levels):
     if n_levels < 1:
@@ -31,38 +35,55 @@ def spin_phase_operator(phi_s):
     return np.cos(phi_s) * sx + np.sin(phi_s) * sy
 
 
-def two_qubit_spin_phase_difference(phi_s):
+def two_qubit_spin_phase_mode(phi_s, mode_vector):
+    mode_vector = np.asarray(mode_vector, dtype=float)
+    if mode_vector.shape != (2,):
+        raise ValueError("mode_vector must contain exactly two ion weights.")
     single_spin = spin_phase_operator(phi_s)
     identity = np.eye(2, dtype=complex)
-    return np.kron(single_spin, identity) - np.kron(identity, single_spin)
+    return (
+        mode_vector[0] * np.kron(single_spin, identity)
+        + mode_vector[1] * np.kron(identity, single_spin)
+    )
+
+
+def two_qubit_spin_phase_difference(phi_s):
+    return two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
 
 def spin_boson_control_system(
     n_levels,
     phi_s,
+    mode_vector=(0.5, -0.5),
+    eta=DEFAULT_LAMB_DICKE_ETA,
     static_fluctuations=(),
     control_fluctuations=(),
 ):
     """Build the two-channel spin-boson Hamiltonian with optional fluctuations.
 
     The nominal Hamiltonian is
-    ``alpha_1 I_spin ⊗ a†a + alpha_2 S_phi ⊗ (a + a†)`` with two-qubit
-    ``S_phi = sigma_phi ⊗ I - I ⊗ sigma_phi``. Fluctuation terms use
-    the same long-correlation convention as the perturbative expansion path:
-    static matrices are already-scaled ``sigma_xi H_xi`` terms and control
-    fluctuation matrices are already-scaled ``sigma_chi_i H_chi_i`` terms.
+    ``alpha_1 I_spin ⊗ a†a + alpha_2 eta S_phi ⊗ X1`` with
+    ``X1 = (a + a†) / 2`` and two-qubit
+    ``S_phi = b_1 sigma_phi ⊗ I + b_2 I ⊗ sigma_phi``. The default
+    ``mode_vector`` is the stretch-mode vector ``(1, -1) / 2``; use
+    ``(1, 1) / 2`` for the COM mode. The default Lamb-Dicke factor is
+    ``eta = 0.075``. Fluctuation terms use the same long-correlation convention
+    as the perturbative expansion path: static matrices are already-scaled
+    ``sigma_xi H_xi`` terms and control fluctuation matrices are already-scaled
+    ``sigma_chi_i H_chi_i`` terms.
     """
 
     spin_identity = np.eye(4, dtype=complex)
     a = annihilation_operator(n_levels)
     adag = a.conj().T
+    x1 = 0.5 * (a + adag)
     dimension = 4 * n_levels
 
     return FluctuatingClosedSystem(
         drift=np.zeros((dimension, dimension), dtype=complex),
         controls=[
             np.kron(spin_identity, adag @ a),
-            np.kron(two_qubit_spin_phase_difference(phi_s), a + adag),
+            float(eta) * np.kron(two_qubit_spin_phase_mode(phi_s, mode_vector), x1),
         ],
         static_fluctuations=static_fluctuations,
         control_fluctuations=control_fluctuations,
@@ -72,8 +93,8 @@ def spin_boson_control_system(
 def spin_boson_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 600.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
     alpha1_cycles=1.0,
 ):
     if n_steps < 1:
@@ -91,7 +112,7 @@ def spin_boson_initial_pulse(
 
     alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
     alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1 = alpha1_center + alpha1_scale * np.cos(
+    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * np.cos(
         2.0 * np.pi * alpha1_cycles * normalized_time
     )
     alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(
@@ -106,8 +127,8 @@ def spin_boson_initial_pulse(
 
 def spin_boson_parameterization(
     n_steps=200,
-    alpha1_khz_bounds=(1.0, 600.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
 ):
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1.")

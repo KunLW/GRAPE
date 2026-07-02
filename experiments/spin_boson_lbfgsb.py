@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,9 +19,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments.reporting import write_experiment_report
+from experiments.reporting import (
+    StepLog,
+    export_pulse_controls,
+    timestamped_experiment_dir,
+    write_experiment_report,
+)
 from quantum_control import (
     ControlProblem,
+    DEFAULT_LAMB_DICKE_ETA,
     EvolutionContext,
     GrapeDifferentiator,
     NominalUnitaryEvolution,
@@ -38,7 +45,7 @@ from quantum_control import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
-    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
 )
 from quantum_control.optimizers import ScipyOptimizer
 
@@ -71,8 +78,8 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
     sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
     number = number_operator(n_levels)
-    displacement = annihilation_operator(n_levels) + creation_operator(n_levels)
-    s_phi = two_qubit_spin_phase_difference(phi_s)
+    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
     return spin_boson_control_system(
         n_levels=n_levels,
@@ -83,7 +90,7 @@ def spin_boson_noisy_control_system(n_levels, phi_s):
         ],
         control_fluctuations=[
             0.001 * np.kron(spin_identity, number),
-            0.005 * 0.5 * np.kron(s_phi, displacement),
+            0.005 * DEFAULT_LAMB_DICKE_ETA * np.kron(s_phi, x1),
         ],
     )
 
@@ -125,6 +132,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run spin-boson L-BFGS-B experiment.")
     parser.add_argument("--maxiter", type=int, default=MAXITER)
     parser.add_argument("--alpha1-cycles", type=float, default=1.0)
+    parser.add_argument(
+        "--print-step",
+        action="store_true",
+        help="Print per-step close fidelity, open fidelity, and cost function.",
+    )
     parser.add_argument(
         "--l1-smooth-weight",
         type=float,
@@ -258,14 +270,49 @@ def main():
         penalized_problem.parameter_shape,
     )
     initial_objective = penalized_problem.value(initial_parameters)
+    masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
+    generated_at = datetime.now()
+    experiment_dir = timestamped_experiment_dir(
+        OUTPUT_DIR,
+        "spin_boson_lbfgsb",
+        generated_at,
+    )
+    experiment_dir.mkdir(parents=True, exist_ok=True)
     optimizer_options = {"maxiter": args.maxiter, "gtol": 1e-12, "ftol": 1e-15}
     optimizer = ScipyOptimizer(
         method="L-BFGS-B",
         maximize=True,
         options=optimizer_options,
     )
+    target_gate = ms_xx_pi_over_2_gate()
+    step_log_path = experiment_dir / "step_log.csv"
+    step_log = StepLog(step_log_path, print_steps=args.print_step)
+
+    step_counter = {"value": 0}
+
+    def record_step(step, parameters):
+        pulse = penalized_problem.pulse_from_parameters(parameters)
+        l1_penalty = penalty.l1_value(parameters, penalized_problem.parameter_shape)
+        l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
+        step_log.append(
+            step=step,
+            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, N_LEVELS),
+            open_fidelity=open_gate_fidelity(noisy_system, pulse, target_gate, N_LEVELS),
+            cost_function=penalized_problem.value(parameters),
+            raw_fidelity=penalized_problem.raw_value(parameters),
+            l1_penalty=l1_penalty,
+            l2_penalty=l2_penalty,
+            gradient_norm=np.linalg.norm(penalized_problem.gradient(parameters)),
+        )
+
+    def step_callback(parameters):
+        step_counter["value"] += 1
+        record_step(step_counter["value"], parameters)
+
+    record_step(0, initial_parameters)
     result = optimizer.optimize_parameters(
         penalized_problem,
+        callback=step_callback,
     )
     final_pulse = result.optimized_pulse
     final_parameters = result.x.reshape(penalized_problem.parameter_shape)
@@ -280,13 +327,11 @@ def main():
     )
     final_objective = penalized_problem.value(final_parameters)
 
-    masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
     if not np.allclose(masked_initial_pulse.amplitudes[[0, -1], 1], 0.0):
         raise RuntimeError("Initial alpha2 endpoints are not masked to zero.")
     if not np.allclose(final_pulse.amplitudes[[0, -1], 1], 0.0):
         raise RuntimeError("Optimized alpha2 endpoints are not masked to zero.")
 
-    target_gate = ms_xx_pi_over_2_gate()
     initial_close_gate_fidelity = closed_gate_fidelity(
         system,
         masked_initial_pulse,
@@ -325,14 +370,32 @@ def main():
 
     time_us = (np.arange(initial_pulse.n_steps) + 0.5) * initial_pulse.dt * 1e6
     time_edges_us = np.arange(initial_pulse.n_steps + 1) * initial_pulse.dt * 1e6
-    pulse_path = OUTPUT_DIR / "spin_boson_pulses.png"
-    propagation_path = OUTPUT_DIR / "spin_boson_state_propagation.png"
+    pulse_path = experiment_dir / "spin_boson_pulses.png"
+    propagation_path = experiment_dir / "spin_boson_state_propagation.png"
+    initial_pulse_npz_path, initial_pulse_csv_path = export_pulse_controls(
+        masked_initial_pulse,
+        experiment_dir / "initial_pulse",
+        RAD_S_PER_KHZ,
+    )
+    final_pulse_npz_path, final_pulse_csv_path = export_pulse_controls(
+        final_pulse,
+        experiment_dir / "final_pulse",
+        RAD_S_PER_KHZ,
+    )
     plot_pulses(time_us, initial_pulse, final_pulse, pulse_path)
     plot_population_marginals(time_edges_us, initial_states, final_states, propagation_path)
 
-    for path in (pulse_path, propagation_path):
+    for path in (
+        pulse_path,
+        propagation_path,
+        step_log_path,
+        initial_pulse_npz_path,
+        initial_pulse_csv_path,
+        final_pulse_npz_path,
+        final_pulse_csv_path,
+    ):
         if not path.exists() or path.stat().st_size == 0:
-            raise RuntimeError(f"Expected non-empty plot at {path}.")
+            raise RuntimeError(f"Expected non-empty output at {path}.")
 
     metrics = {
         "fidelity": (initial_fidelity, final_fidelity),
@@ -365,6 +428,12 @@ def main():
             ("control_fluctuation_count", len(noisy_system.control_fluctuations)),
             ("l1_smooth_weight", args.l1_smooth_weight),
             ("l2_smooth_weight", args.l2_smooth_weight),
+            ("print_step", args.print_step),
+            ("step_log", step_log_path.name),
+            ("initial_pulse_npz", initial_pulse_npz_path.name),
+            ("initial_pulse_csv", initial_pulse_csv_path.name),
+            ("final_pulse_npz", final_pulse_npz_path.name),
+            ("final_pulse_csv", final_pulse_csv_path.name),
             ("optimizer_method", "L-BFGS-B"),
             ("optimizer_maximize", True),
             ("optimizer_options", optimizer_options),
@@ -387,6 +456,7 @@ def main():
             ("Pulse parameters", pulse_path),
             ("State propagation", propagation_path),
         ],
+        generated_at=generated_at,
     )
 
     print(f"initial_fidelity={metrics['fidelity'][0]:.12g}")
@@ -409,6 +479,12 @@ def main():
     print(f"optimizer_message={result.message}")
     print(f"optimizer_nit={getattr(result, 'nit', 'NA')}")
     print(f"optimizer_nfev={getattr(result, 'nfev', 'NA')}")
+    print(f"experiment_dir={experiment_dir}")
+    print(f"step_log={step_log_path}")
+    print(f"initial_pulse_npz={initial_pulse_npz_path}")
+    print(f"initial_pulse_csv={initial_pulse_csv_path}")
+    print(f"final_pulse_npz={final_pulse_npz_path}")
+    print(f"final_pulse_csv={final_pulse_csv_path}")
     print(f"pulse_plot={pulse_path}")
     print(f"propagation_plot={propagation_path}")
     print(f"markdown_report={report_path}")

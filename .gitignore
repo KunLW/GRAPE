@@ -41,5 +41,14 @@ Thumbs.db
 *.swp
 *.swo
 
+# Experiment outputs
+experiments/outputs/
+
 # doc
 *.pdf
+*.bcf
+*.aux
+*.blg
+*.xml
+*.synctex.gz
+*-blx.bbl

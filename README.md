@@ -71,6 +71,56 @@ value = problem.value()
 gradient = problem.gradient()
 ```
 
+## CLI Usage
+
+Run the perturbative spin-boson open-gate optimizer from the repository root:
+
+```bash
+.venv/bin/python experiments/spin_boson_perturbative_lbfgsb.py \
+  --maxiter 40 \
+  --n-steps 200 \
+  --workers 1
+```
+
+Each run writes a timestamped directory under `experiments/outputs/`. The
+`report.md` file is created before optimization starts with a preview of the
+configuration, output paths, system construction script, noise terms, and
+`kappa_1`/`kappa_2` diagnostics. When optimization finishes or is interrupted,
+the final results are appended to the same report. Checkpoint files
+`latest_pulse.npz`, `latest_pulse.csv`, and `latest_parameters.npz` are updated
+during optimization.
+
+Useful options:
+
+```text
+--maxiter N                 L-BFGS-B iteration limit.
+--n-steps N                 Number of piecewise-constant pulse slices.
+--alpha1-cycles X           Initial alpha1 cosine cycles.
+--l1-smooth-weight W        First-difference smoothness penalty.
+--l2-smooth-weight W        Second-difference smoothness penalty.
+--workers N                 Worker processes for state-pair averaging.
+--print-step                Print per-step fidelity/objective diagnostics.
+--print-fidelity-terms      Print and save perturbative fidelity terms.
+--initial-pulse-npz PATH    Start from an exported pulse .npz.
+--no-progress               Disable the progress bar.
+```
+
+Run an initial-condition sweep:
+
+```bash
+.venv/bin/python experiments/spin_boson_perturbative_initial_sweep.py \
+  --initial-mode all \
+  --n-runs 4 \
+  --seed 12345 \
+  --maxiter 40 \
+  --sweep-workers 2
+```
+
+`--initial-mode` can be `noise`, `random`, `custom`, `both`, or `all`. Custom
+initial pulses can be supplied by repeating `--initial-pulse-npz PATH`; the
+loaded pulse must match the configured shape and keep the alpha2 endpoints at
+zero.
+
 ## Averaging Multiple State Pairs
 
 `ExpansionStateAverageFidelity` evaluates the same perturbative objective over
@@ -100,10 +150,13 @@ gradient = averaged_problem.gradient()
 ## Spin-Boson Control Hamiltonian
 
 The spin-boson helper builds the Hamiltonian
-`H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) S_phi ⊗ (a + a†)`
+`H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) eta S_phi ⊗ X1`,
+where `X1 = (a† + a) / 2` and the default `eta = 0.075`. It is represented
 as a two-channel fluctuating closed system with two spin qubits. The spin term is
-`S_phi = sigma_phi ⊗ I - I ⊗ sigma_phi`. The pulse array has shape `(n_steps, 2)`;
-column 0 is `alpha_1(t)` and column 1 is `alpha_2(t)`.
+`S_phi = b_1 sigma_phi ⊗ I + b_2 I ⊗ sigma_phi`; the default stretch-mode
+vector is `b = (1, -1) / 2`, and the COM-mode vector is `b = (1, 1) / 2`.
+The pulse array has shape `(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1
+is `alpha_2(t)`.
 Optional `static_fluctuations` and `control_fluctuations` use the same
 already-scaled `sigma H` convention as `IonTrapRFSystem`. The pulse helper takes
 user-facing bounds in kHz and total time in microseconds, then stores amplitudes
