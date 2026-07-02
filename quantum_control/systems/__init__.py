@@ -2,6 +2,8 @@ from quantum_control.systems.base import ControlSystem
 from quantum_control.systems.closed_system import ClosedSystem, FluctuatingClosedSystem
 from quantum_control.systems.ion_trap_rf import IonTrapRFSystem
 from quantum_control.systems.spin_boson import (
+    DEFAULT_ALPHA1_KHZ_BOUNDS,
+    DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
     annihilation_operator,
     creation_operator,
@@ -19,6 +21,8 @@ __all__ = [
     "ControlSystem",
     "FluctuatingClosedSystem",
     "IonTrapRFSystem",
+    "DEFAULT_ALPHA1_KHZ_BOUNDS",
+    "DEFAULT_ALPHA2_KHZ_BOUNDS",
     "DEFAULT_LAMB_DICKE_ETA",
     "annihilation_operator",
     "creation_operator",

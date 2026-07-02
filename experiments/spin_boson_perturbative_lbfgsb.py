@@ -27,6 +27,8 @@ from experiments.reporting import (
     timestamped_experiment_dir,
 )
 from quantum_control import (
+    DEFAULT_ALPHA1_KHZ_BOUNDS,
+    DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
@@ -137,7 +139,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s):
         _noise_term_spec(
             kind="static",
             name="static[1]",
-            coefficient=1256.637,
+            coefficient=300,
             operator=np.kron(spin_identity, number),
             definition="kron(I_spin, number_operator)",
             usage="added directly to H_fluctuation",
@@ -766,12 +768,20 @@ def render_system_construction_script(args, optimizer_options):
             f"eta = {DEFAULT_LAMB_DICKE_ETA!r}",
             f"system = spin_boson_control_system(n_levels={N_LEVELS}, phi_s=phi_s, eta=eta)",
             f"noisy_system = spin_boson_noisy_control_system(n_levels={N_LEVELS}, phi_s=phi_s)",
+            f"alpha1_khz_bounds = {DEFAULT_ALPHA1_KHZ_BOUNDS!r}",
+            f"alpha2_khz_bounds = {DEFAULT_ALPHA2_KHZ_BOUNDS!r}",
             "initial_pulse = _customized_initial_pulse(",
             f"    n_steps={args.n_steps},",
+            "    alpha1_khz_bounds=alpha1_khz_bounds,",
+            "    alpha2_khz_bounds=alpha2_khz_bounds,",
             f"    alpha1_cycles={args.alpha1_cycles!r},",
             ")",
             "parameterization = Alpha2EndpointZeroParameterization(",
-            "    spin_boson_parameterization(initial_pulse.n_steps)",
+            "    spin_boson_parameterization(",
+            "        initial_pulse.n_steps,",
+            "        alpha1_khz_bounds=alpha1_khz_bounds,",
+            "        alpha2_khz_bounds=alpha2_khz_bounds,",
+            "    )",
             ")",
             "target_gate = ms_xx_pi_over_2_gate()",
             f"state_pairs = motion_resolved_gate_state_pairs(target_gate, {N_LEVELS})",
@@ -860,8 +870,8 @@ def _format_markdown_value(value):
 def _customized_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 10.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
     alpha1_cycles=1.0,
 ):
     if n_steps < 1:
@@ -879,12 +889,9 @@ def _customized_initial_pulse(
 
     alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
     alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1 = alpha1_center + 0.3 + 0.7 * alpha1_scale * np.cos(
-        2.0 * np.pi * alpha1_cycles * normalized_time
-    )
-    alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(
-        np.pi * normalized_time
-    )
+    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * np.random.randn(n_steps)
+    alpha1 = np.clip(alpha1, alpha1_lower, alpha1_upper)
+    alpha2 = alpha2_upper * np.ones(n_steps, dtype=float)
 
     return PiecewiseConstantPulse(
         amplitudes=np.column_stack([alpha1, alpha2]),
@@ -1013,10 +1020,16 @@ def run_perturbative_experiment(
 
     initial_pulse = _customized_initial_pulse(
         n_steps=args.n_steps,
+        alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+        alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
         alpha1_cycles=args.alpha1_cycles,
     )
     parameterization = Alpha2EndpointZeroParameterization(
-        spin_boson_parameterization(initial_pulse.n_steps)
+        spin_boson_parameterization(
+            initial_pulse.n_steps,
+            alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+            alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
+        )
     )
     custom_initial_metadata = None
     if initial_parameters is None and getattr(args, "initial_pulse_npz", None) is not None:

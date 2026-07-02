@@ -41,6 +41,8 @@ from experiments.spin_boson_perturbative_lbfgsb import (
 )
 from quantum_control import (
     ControlProblem,
+    DEFAULT_ALPHA1_KHZ_BOUNDS,
+    DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
     EvolutionContext,
     ExpansionFidelity,
@@ -1010,9 +1012,9 @@ def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
     pulse = spin_boson_initial_pulse()
-    alpha1_lower = 2.0 * np.pi * 1000.0
-    alpha1_upper = 2.0 * np.pi * 10000.0
-    alpha2_upper = 2.0 * np.pi * 20000.0
+    alpha1_lower = DEFAULT_ALPHA1_KHZ_BOUNDS[0] * 2.0 * np.pi * 1000.0
+    alpha1_upper = DEFAULT_ALPHA1_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0
+    alpha2_upper = DEFAULT_ALPHA2_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0
     alpha1 = pulse.amplitudes[:, 0]
     alpha2 = pulse.amplitudes[:, 1]
 
@@ -1044,11 +1046,21 @@ def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
 
     assert np.allclose(
         parameterization.lower,
-        np.array([2.0 * np.pi * 1000.0, 0.0]),
+        np.array(
+            [
+                DEFAULT_ALPHA1_KHZ_BOUNDS[0] * 2.0 * np.pi * 1000.0,
+                DEFAULT_ALPHA2_KHZ_BOUNDS[0] * 2.0 * np.pi * 1000.0,
+            ]
+        ),
     )
     assert np.allclose(
         parameterization.upper,
-        np.array([2.0 * np.pi * 10000.0, 2.0 * np.pi * 20000.0]),
+        np.array(
+            [
+                DEFAULT_ALPHA1_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0,
+                DEFAULT_ALPHA2_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0,
+            ]
+        ),
     )
     assert np.allclose(reconstructed, pulse.amplitudes)
     assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10

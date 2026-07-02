@@ -28,6 +28,8 @@ from experiments.reporting import (
     write_experiment_report_at,
 )
 from quantum_control import (
+    DEFAULT_ALPHA1_KHZ_BOUNDS,
+    DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
@@ -447,8 +449,8 @@ def _transition(initial, final):
 def _customized_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 10.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
     alpha1_cycles=1.0,
 ):
     if n_steps < 1:
@@ -599,10 +601,16 @@ def run_perturbative_experiment(
 
     initial_pulse = _customized_initial_pulse(
         n_steps=args.n_steps,
+        alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+        alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
         alpha1_cycles=args.alpha1_cycles,
     )
     parameterization = Alpha2EndpointZeroParameterization(
-        spin_boson_parameterization(initial_pulse.n_steps)
+        spin_boson_parameterization(
+            initial_pulse.n_steps,
+            alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+            alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
+        )
     )
     custom_initial_metadata = None
     if initial_parameters is None and getattr(args, "initial_pulse_npz", None) is not None:

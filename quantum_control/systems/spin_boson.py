@@ -7,6 +7,8 @@ from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems.closed_system import FluctuatingClosedSystem
 
 DEFAULT_LAMB_DICKE_ETA = 0.075
+DEFAULT_ALPHA1_KHZ_BOUNDS = (1.0, 60.0)
+DEFAULT_ALPHA2_KHZ_BOUNDS = (0.0, 200.0)
 
 
 def annihilation_operator(n_levels):
@@ -91,8 +93,8 @@ def spin_boson_control_system(
 def spin_boson_initial_pulse(
     n_steps=200,
     total_time_us=225.8,
-    alpha1_khz_bounds=(1.0, 10.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
     alpha1_cycles=1.0,
 ):
     if n_steps < 1:
@@ -110,7 +112,7 @@ def spin_boson_initial_pulse(
 
     alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
     alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1 = alpha1_center + alpha1_scale * np.cos(
+    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * np.cos(
         2.0 * np.pi * alpha1_cycles * normalized_time
     )
     alpha2 = alpha2_lower + (alpha2_upper - alpha2_lower) * np.sin(
@@ -125,8 +127,8 @@ def spin_boson_initial_pulse(
 
 def spin_boson_parameterization(
     n_steps=200,
-    alpha1_khz_bounds=(1.0, 10.0),
-    alpha2_khz_bounds=(0.0, 20.0),
+    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
+    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
 ):
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1.")
