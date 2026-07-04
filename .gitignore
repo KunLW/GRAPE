@@ -35,6 +35,10 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Claude Code (local-only files and git worktrees; keep shared config trackable)
+.claude/worktrees/
+.claude/settings.local.json
+
 # Logs and temporary files
 *.log
 *.tmp
