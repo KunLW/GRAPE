@@ -21,7 +21,7 @@
 \end{align*}
 We require $\kappa_1 = \tau \norm{H}\ll 1$.
 \begin{lemma}[Recursive Calculation of the Gradient of Perturbative Expectation]
-    For an expetation value of the form 
+    For an expectation value of the form
     \begin{equation}
         \mathcal{F}^{(l)} = \sum_{\abs{\alpha}=l} \Gamma^{(n)}_{\alpha}\mel{\psi}{U_N\cdots V_{\alpha_1} \cdots V_{\alpha_l} \cdots U_1}{\phi}
     \end{equation}
@@ -30,7 +30,7 @@ We require $\kappa_1 = \tau \norm{H}\ll 1$.
         &\ket{F^{(0)}_k} = U_k\cdots U_1\ket{\phi_0}, &&\ket{F^{(m)}_k} = U_k\ket{F^{(m)}_{k-1}} + V_k\ket{F^{(m-1)}_{k-1}}\\
         &\bra{B^{(0)}_k} = \bra{\phi_1}U_N\cdots U_{k+1}, &&\bra{B^{(m)}_k} = \bra{B^{(m)}_{k+1}}U_{k+1} + \bra{B^{(m-1)}_{k+1}}V_{k+1}
     \end{align*}
-    with specific $l$ boundary condition for those $l$-order state groups.\\
+    with the appropriate $l$-order boundary conditions for those state groups.\\
     The derivative could be simply calculated by the following:
     \begin{align*}
         \dvbar{\mathcal{F}^{(m)}} = \pdv{\mathcal{F}^{(m)}}{c_{i}(k)} = \sum_{m+n=l}\braket{B_k^{(m)}}{\dvbar{F_k^{(n)}}},
@@ -38,39 +38,40 @@ We require $\kappa_1 = \tau \norm{H}\ll 1$.
 \end{lemma}
 Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different responses to certain types of noise.
 \section{Noise: Fluctuation and Decoherence}
-Additional to the original parametrized hamiltonian, we also consider the uncertainty of the system. The hamiltonian is than consider as a function of random variable $\xi$:
+In addition to the original parametrized Hamiltonian, we also consider the uncertainty of the system. The Hamiltonian is then considered as a function of the random variables $\vb*\xi$ and $\vb*\chi$:
 \begin{equation}
     H(t; \vb* \xi, \vb* \chi) = H_0(t) + \sum_m \xi_m(t) \cdot H_{\xi_m}+ \sum_{i} c_i(t) [H_i + \chi_i(t) H_{\chi_i}]
     \label{eq:total_hamiltonian}
 \end{equation}
-where $\xi$ and $\chi$ are random variables that describe the fluctuation of the system with mean value zero.
+where $\xi$ and $\chi$ are zero-mean random variables that describe the fluctuation of the system.
 
-Two limits of time correlation of the fluctuation are considered. The first one is the limit of infinitely long time correlation, i.e., $\xi$ is a random variable that is constant during the whole gate operation. The second one is the limit of infinitely short time correlation, i.e., $\xi$ is a random variable that is independent at different time.
-The correlation function for each are 
+Two limiting cases of the time correlation of the fluctuation are considered. The first is the limit of infinitely long time correlation, i.e., $\xi$ is a random variable that stays constant throughout the gate operation. The second is the limit of infinitely short time correlation, i.e., $\xi$ is a random variable that is independent at different times.
+The correlation functions for each are
 \begin{align}
     \text{long time correlation (fluctuation): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \\
     \text{short time correlation (decoherence): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \delta(t - t')
 \end{align}
-Long time correlation is considered as the fluctuation of the system, while short time correlation is considered as the markovian noise of the system, which can be described by the Lindblad master equation.
+Long time correlation is treated as the fluctuation of the system, while short time correlation is treated as the Markovian noise of the system, which can be described by the Lindblad master equation.
 Thus the evolution of the system can be described by the following equation:
 \begin{equation}
     \dot \rho = -i[H(t; \vb* \xi, \vb* \chi), \rho] + \sum_j  (L_j \rho L_j^\dagger - \frac{1}{2} L_j^\dagger L_j \rho - \frac{1}{2} \rho L_j^\dagger L_j)
 \end{equation}
-Lindblad gives from the short time correlation limit, and the $\xi,\chi$ reduced to time-independent random variable that only has long time correlation.
+The Lindblad form arises from the short time correlation limit; in the long time correlation limit, $\xi$ and $\chi$ reduce to time-independent random variables.
 
 \section{Gate Fidelity and Cost Function}
-Let $F$ be the close gate fidelity that does not include the effect of fluctuation and noise, and $\mathcal{F}$ be the open gate fidelity that faithfully describe the system under fluctuation and noise. $\mathcal{J}$ be the real function that we actually minimize.
+Let $F$ be the closed gate fidelity, which does not include the effect of fluctuation and noise, and let $\mathcal{F}$ be the open gate fidelity, which faithfully describes the system under fluctuation and noise. Let $\mathcal{J}$ be the real function that we actually minimize.
 \begin{align*}
     \closef &= \frac{1}{N} \sum_{p,q}\bra{p,q}\hat U^\dagger U(0, T; \vb c)\ketbra{p_0,q} U(0, T; \vb c)^\dagger \hat U \ket{p,q}\\
     \openf &= \frac{1}{N} \sum_{p,q}\expval{\bra{p,q}\hat U^\dagger {\mathcal{E}_\xi}\left(\ketbra{p_0,q};\vb c\right)\hat U \ket{p,q}}\\
     \mathcal{J} &= 1 - \openf + \lambda L_1
 \end{align*}
-the set of $q$ spans the logical subspace. For two qubits gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{-}, \ket{+i}, \ket{-i}\}^{\otimes 2}$. Thus $N = 36$.
+where the set of $q$ spans the logical subspace. For a two-qubit gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{-}, \ket{+i}, \ket{-i}\}^{\otimes 2}$. Thus $N = 36$.
 
 
 
 \subsection{Gradient with Fluctuation}
-Consider the hamiltonian with fluctuation, we can write the evolution of the system as:
+Considering the Hamiltonian with fluctuation, we can write the evolution of the system as:
+% REVIEW: dimensional/consistency check on the exponent -- should this be U = \exp\{-i\tau(H + H_f)\} (i.e. H_f also multiplied by -i\tau)? As written, H_f appears without the -i\tau factor.
 \begin{equation}
     U = \exp\{-i\tau H + H_f\}
 \end{equation}
@@ -101,7 +102,7 @@ we can get the following expansion of the open gate fidelity to first non-vanish
 \end{equation}
 where $W_0 = \ketbra{\psi_0}$, $W_{-1} = W_{1}^\dagger$. Notice that the perturbation expansion is valid (converge) only when $\kappa_2 = \sigma\norm{H_{\text{fluc}}} T < 1$. A good approximation for the first order approximation further requires $(\sigma\norm{H_{\text{fluc}}} T)^2 \ll 1$.
 
-To calculate the derivative of the open gate fidelity, we need first define following six states group, for $k = 1, 2,\ldots, N$:
+To calculate the derivative of the open gate fidelity, we first define the following six groups of states, for $k = 1, 2,\ldots, N$:
 \begin{itemize}
     \item $\ket{F_k} = W_k\cdots W_1\ket{\psi_0}$ for the forward propagation of the initial state with no fluctuation
     \item $\ket{SF_k} = \sum_{i=1}^k W_k\cdots W_{i+1}V_i W_{i-1} \cdots W_1\ket{\psi_0}$ for the forward propagation with a single fluctuation. $\ket{SF_k} = 0$ if $k = 0, 1$
@@ -110,7 +111,7 @@ To calculate the derivative of the open gate fidelity, we need first define foll
     \item $\bra{SB_k} = \sum_{j}\bra{\psi} W_N \cdots V_j \cdots W_{k+1}$ for the backward propagation with a single fluctuation
     \item $\bra{DB_k} = \sum_{i,j}\bra{\psi} W_N \cdots V_i \cdots V_j \cdots W_{k+1}$ for the backward propagation with double fluctuation
 \end{itemize}
-Then open fidelity can be decomposed by thinking of putting two indistinguishable $V$ to 4 different positions
+The open fidelity can then be decomposed by placing two indistinguishable $V$ operators in the four possible positions:
 \begin{itemize}
     \item $\ket{SF_k} = W_k\ket{SF_{k-1}} + V_k \ket{F_{k-1}}$
     \item $\ket{DF_k} = W_k\ket{DF_{k-1}} + V_k \ket{SF_{k-1}}$
@@ -186,7 +187,8 @@ Then open fidelity can be decomposed by thinking of putting two indistinguishabl
  
     \end{tikzpicture}
 \caption{The fluctuation summation can be decomposed as follows: the propagation chain is partitioned by $U_k$, $\rho_0$, and $U_k^\dagger$, which defines four possible insertion regions for each fluctuation operator. The two indistinguishable $V$ operators may be placed either in the same region or in different regions. In each region, the contribution can be double fluctuation ($DF$ or $DB$), single fluctuation ($SF$ or $SB$), or no fluctuation ($F$ or $B$). It is also worth to note that at second order, each chain contains exactly two fluctuation operators. }
-\end{figure} we have total of 11 different terms.
+\end{figure}
+In total there are 11 different terms.
 
 
 \begin{align*}
@@ -198,6 +200,7 @@ Then open fidelity can be decomposed by thinking of putting two indistinguishabl
     + &B^\dagger\, DF\, F^\dagger\, B + h.c.\\
     + &B^\dagger\, SF\, SF^\dagger\, B
 \end{align*}
+% REVIEW: the "{c}" after \dvbar{F} looks like a stray token (\dvbar takes a single argument), rendering as $\overline{F}c$. Did you mean $\overline{\mathcal{F}} = \pdv{\mathcal{F}}{\vb c}$?
 \begin{align*}
     \mathcal{\overline{F}} = \dvbar{F}{c} = 2\mathbf{Re}\{B^\dagger \dvbar{F}F^\dagger B + DB^\dagger \dvbar{F}F^\dagger B + B\dvbar{F}F^\dagger DB + \cdots\}
 \end{align*}
@@ -211,11 +214,12 @@ Now the derivative can be calculated by $\dvbar{F}$, $\dvbar{SF}$, $\dvbar{DF}$.
     \dvbar{F_k} &= \pdv{W_k}{\vb c(k)} W_{k-1} \cdots W_1 \ket{\psi_0} = -i\tau H_c \ket{F_k} = \dvbar{W_k}\ket{F_{k-1}}\\
     \dvbar{SF_k} &= \sum_{i=1}^{k-1} \pdv{W_k}{\vb c(k)} W_{k-1} \cdots W_{i+1}V_i W_{i-1} \cdots W_1\ket{\psi_0} + \pdv{V_k}{\vb c(k)}W_{k-1} \cdots W_1\ket{\psi_0} \\
     &= \dvbar{W_k}\ket{SF_{k-1}} + \dvbar{V_k}\ket{F_{k-1}} \\
+    % REVIEW: the factor "W_k" right after \pdv{W_k}{\vb c(k)} looks like it should be W_{k-1} (cf. the \dvbar{SF_k} line above), so the chain reads \pdv{W_k}{}\,W_{k-1}\cdots.
     \dvbar{DF_k} &= \sum_{i,j}^{k-1} \pdv{W_k}{\vb c(k)} W_k \cdots V_i \cdots V_j \cdots W_1\ket{\psi_0} + \sum_{i}\pdv{V_k}{\vb c(k)}W_{k-1}\cdots V_{i}\cdots W_1\ket{\psi_0} \\
     &= \dvbar{W_k}\ket{DF_{k-1}} + \dvbar{V_k}\ket{SF_{k-1}}
 \end{align*}
 
-The derivative of the propagator $W$ and $V$ can be calculated by the Frechet derivative of the matrix exponential. With the condition $\kappa_1\ll 1$, we can get the expansion of Dyson and remain the first order term. 
+The derivatives of the propagators $W$ and $V$ can be calculated from the Fr\'echet derivative of the matrix exponential. With the condition $\kappa_1\ll 1$, we can use the Dyson expansion and keep only the first order term.
 \begin{align}
     \pdv{W_k}{c_i(j)}
     &=
@@ -251,14 +255,14 @@ c_{k,a}\|H_{\mathrm{control\_fluc},a}\|_2
 \sum_k \sigma_k^2
 }
 \]
-The leading order of the fluctuation effect is $(\sigma_{\mathrm{rms}}T)^2$, define $\kappa_2 = \sigma_{\mathrm{rms}}T$, we require $\kappa_2^2 \ll 1$ for the first order approximation to be valid.
+The leading-order fluctuation effect is $(\sigma_{\mathrm{rms}}T)^2$; defining $\kappa_2 = \sigma_{\mathrm{rms}}T$, we require $\kappa_2^2 \ll 1$ for the first-order approximation to be valid.
 
 
 \subsection{Gradient with Decoherence}
 
 
 \section{Experiment: Ion Trap and Laser Interaction}
-Consider a system of $2$ ions in a linear trap (Paul trap). Their exists two collective motional modes in each axis. The COM mode and the stretch mode. The COM mode is the one where the two ions move in phase, while the stretch mode is the one where they move out of phase. The frequencies of these modes are different. The COM mode has a frequency $\omega_{COM}$, while the stretch mode has a frequency $\omega_{stretch}$. 
+Consider a system of $2$ ions in a linear trap (Paul trap). There exist two collective motional modes along each axis: the COM mode and the stretch mode. The COM mode is the one where the two ions move in phase, while the stretch mode is the one where they move out of phase. The frequencies of these modes are different. The COM mode has a frequency $\omega_{COM}$, while the stretch mode has a frequency $\omega_{stretch}$. 
 If an outer magnetic field is applied, ions will have a Zeeman splitting. The qubit could be encoded in this Zeeman splitting level, directly by two fine structure levels. The first will use radio frequency (RF) to drive the transition between the two levels. The second will use Raman transition to drive the transition between the two levels.
 
 The interaction:
@@ -275,7 +279,7 @@ where $\Omega$ is the Rabi frequency for the laser interacting with the certain 
     H =  \omega_k a_k^\dagger a_k +  \frac{\omega_0}{2} \sigma_z +  \frac{\Omega}{2} (e^{i(k x - \omega t + \phi)} + e^{-i(k x - \omega t + \phi)})\sigma_x 
 \end{equation}
 
-Change into interaction picture w.r.t. $H_0 = \omega_k a_k^\dagger a_k +  (\flatfrac{\omega_0}{2}) \sigma_z$, $U = e^{-i H_0 t}$, we have the tranformation of the Hamiltonian:
+Change into interaction picture w.r.t. $H_0 = \omega_k a_k^\dagger a_k +  (\flatfrac{\omega_0}{2}) \sigma_z$, $U = e^{-i H_0 t}$, we have the transformation of the Hamiltonian:
 \begin{equation}
     H \to H_I = U^\dagger H U - i U^\dagger \dot{U}
 \end{equation}
@@ -296,13 +300,13 @@ The interaction Hamiltonian can be easily calculated as:
 \begin{equation}
     H_I =  \frac{\Omega}{2} \left\{\exp i \left(k x_0 (a_k e^{-i \omega_k t} + a_k^\dagger e^{i \omega_k t}) - \omega t + \phi\right) + h.c.\right\} (\sigma_+ e^{i \omega_0 t} + h.c.)
 \end{equation}
-If the external electric field frequency $\omega$ is near $\omega_0$. Apply the rotating wave approximation (RWA), we can drop the fast oscillating terms, and get the following Hamiltonian:
+If the external electric field frequency $\omega$ is near $\omega_0$, we apply the rotating wave approximation (RWA), drop the fast oscillating terms, and obtain the following Hamiltonian:
 \begin{equation}
     H_{\textit{RWA}} =  \frac{\Omega}{2}\sigma_+ \left[\exp i \left(k x_0 (a_k e^{-i \omega_k t} + a_k^\dagger e^{i \omega_k t})\right)\right]e^{-i\Delta t}e^{i\phi} + h.c.  \tag{Hamiltonian with RWA}
 \end{equation}
-where $\Delta = \omega - \omega_0$ is the detuning of the laser frequency from the qubit inertial frequency.
+where $\Delta = \omega - \omega_0$ is the detuning of the laser frequency from the qubit internal frequency.
 
-If the wave vector of the external electric field along the $z$ direction is small compared to the size of the motional state of the ion, i.e. $\eta = k x_0 \ll 1$, then we are in the Lamb-Dicke regime: $\eta = k x_0 \ll 1$, we can expand the exponential to the first order:
+If the wave vector of the external electric field along the $z$ direction is small compared to the size of the motional state of the ion, i.e. $\eta = k x_0 \ll 1$, then we are in the Lamb-Dicke regime, and we can expand the exponential to first order:
 \begin{equation}
     H_{LD} =  \frac{\Omega}{2}\sigma_+e^{i\phi} \left[1 + i \eta a_k e^{-i \omega_k t} + i\eta a_k^\dagger e^{i \omega_k t}\right]e^{-i\Delta t} + h.c.
      \tag{Hamiltonian with Lamb-Dicke Approximation}
@@ -311,9 +315,9 @@ A more careful analysis for the Lamb-Dicke regime is shown as follows. We can ex
 \begin{equation}
     \exp(i\eta (a + a^\dagger)) = 1 + i\eta (a + a^\dagger) - \frac{\eta^2}{2} (a + a^\dagger)^2  + \cdots 
 \end{equation}
-represent this operator in the Fock basis, we see that the diagnal elements are $1 - \frac{\eta^2}{2} (2n + 1)$, the elements above the diagnal are $i\eta \sqrt{n+1}$, the elements below the diagnal are $i\eta \sqrt{n}$, the elements above the second diagnal are $-\frac{\eta^2}{2} \sqrt{(n+1)(n+2)}$, the elements below the second diagnal are $-\frac{\eta^2}{2} \sqrt{n(n-1)}$. Use the trace measure of operator, one can conclude that a good approximation to second order needs $\eta\sqrt{\bar n + 1} \ll 1$, where $\bar n$ is the average phonon number of the motional state. 
+Representing this operator in the Fock basis, we see that the diagonal elements are $1 - \frac{\eta^2}{2} (2n + 1)$, the elements above the diagonal are $i\eta \sqrt{n+1}$, the elements below the diagonal are $i\eta \sqrt{n}$, the elements above the second diagonal are $-\frac{\eta^2}{2} \sqrt{(n+1)(n+2)}$, the elements below the second diagonal are $-\frac{\eta^2}{2} \sqrt{n(n-1)}$. Using the trace norm of the operator, one can conclude that a good approximation to second order requires $\eta\sqrt{\bar n + 1} \ll 1$, where $\bar n$ is the average phonon number of the motional state.
 
-We can now define three kinds of external electric field: the carrier, the red sideband, and the blue sideband. For each satisfy: $\Delta = 0$, $\Delta = - \omega_k $, $\Delta = \omega_k$. Each of them will have a different effective Hamiltonian by applying the RWA. 
+We can now define three kinds of external electric field: the carrier, the red sideband, and the blue sideband, which satisfy $\Delta = 0$, $\Delta = - \omega_k$, and $\Delta = \omega_k$, respectively. Each of them gives a different effective Hamiltonian after applying the RWA.
 \begin{align}
     \begin{cases*}
     H_{carrier} = \frac{\Omega}{2} \sigma_+ e^{i\phi}e^{-i\Delta t} + h.c. \\
@@ -321,7 +325,7 @@ We can now define three kinds of external electric field: the carrier, the red s
     H_{blue} = i \frac{\Omega}{2} \eta \sigma_+ e^{i\phi} a_k^\dagger e^{-i(\Delta - \omega_k) t} + h.c.
     \end{cases*}
 \end{align}
-Apply a Bichromatic electric field with frequency $\Delta_{r} = - \omega_k - \delta$ and $\Delta_{b} = \omega_k + \delta$, we can get the following Hamiltonian:
+Applying a bichromatic electric field with detunings $\Delta_{r} = - \omega_k - \delta$ and $\Delta_{b} = \omega_k + \delta$, we get the following Hamiltonian:
 \begin{equation}
     H_{bi} = (i \frac{\Omega}{2} \eta \sigma_+ e^{i\phi_r} a_k e^{i\delta t} + h.c.) + (i \frac{\Omega}{2} \eta \sigma_+ e^{i\phi_b} a_k^\dagger e^{-i\delta t} + h.c.)
 \end{equation}
@@ -329,7 +333,7 @@ Define $\phi_s = \frac{\phi_r + \phi_b + \pi}{2}$, $\phi_m = \frac{\phi_b - \phi
 \begin{equation}
     H_{bi} = ( \frac{\Omega}{2} \eta \sigma_+ e^{i(\phi_s - \phi_m)} a_k e^{i\delta t} + h.c.) + ( \frac{\Omega}{2} \eta \sigma_+ e^{i(\phi_s + \phi_m)} a_k^\dagger e^{-i\delta t} + h.c.)
 \end{equation}
-We finally get the effective hamiltonian of one ion interacting with bichromatic laser coupling with mode $k$:
+We finally get the effective Hamiltonian of one ion interacting with a bichromatic laser coupling to mode $k$:
 \begin{align}
     H_k &= \frac{\Omega}{2} \eta (\sigma_+ e^{i\phi_s} + \sigma_- e^{-i\phi_s})(a_k e^{i(\delta t - \phi_m)} + a_k^\dagger e^{-i(\delta t - \phi_m)})
 \end{align}
@@ -346,13 +350,14 @@ we can rewrite the Hamiltonian as:
 \end{equation}
 
 
-The sum of the phase determine the spin direction, the difference of the phase determine the motional trajectory direction in the phase space. 
+The sum of the phases determines the spin direction, while the difference of the phases determines the direction of the motional trajectory in phase space.
 
 When the collective motional mode is considered for two ions, and the external electric field is applied to both ions, the effective Hamiltonian can be written as:
 \begin{equation}
     H = \frac{\Omega}{2} \eta S_{\phi_s} \otimes A_{k, \phi_m}(t) \tag{Effective Hamiltonian for bichromatic laser coupling with two ions}
 \end{equation}
-where $S_\phi = \vb b_k \cdot \vb*\sigma_\phi$, $\vb b_k$ is the mode vector of the mode $k$. For com mode, $\vb b_k = (1,1)/2$, for stretch mode, $\vb b_k = (1,-1)/2$. Notation: $S^+$ is the COM mode, $S^-$ is the stretch mode.
+where $S_\phi = \vb b_k \cdot \vb*\sigma_\phi$ and $\vb b_k$ is the mode vector of mode $k$. For the COM mode, $\vb b_k = (1,1)/2$; for the stretch mode, $\vb b_k = (1,-1)/2$. Notation: $S^+$ denotes the COM mode, $S^-$ denotes the stretch mode.
+% REVIEW: the mode vectors $(1,\pm1)/2$ are not unit-normalized ($\lVert\vb b_k\rVert = 1/\sqrt2$). Confirm this is the intended normalization rather than $(1,\pm1)/\sqrt2$.
 
 For the stretch mode, the two ions will move in opposite direction, so the effective Hamiltonian can be written as:
 \begin{equation}
@@ -399,7 +404,7 @@ The system evolves under the following Hamiltonian:
     H = \alpha_1(t) (1 + \chi_1)\hat n + \alpha_2(t) (1+\chi_2)S^-_{\phi_s} \otimes \hat x_k + \xi_1 S_{\phi_s}^{+}\otimes \hat x_k + \xi_2 \hat n 
 \end{equation}
 
-The boundary of the control parameters and the std of the fluctuation are given as follows:
+The bounds on the control parameters and the standard deviations of the fluctuations are given as follows:
 \begin{align*}
     &\alpha_1\in 2\pi \cdot[1, 600] kHz \\
     &\alpha_2\in 2\pi \cdot[0, 20] kHz \\
