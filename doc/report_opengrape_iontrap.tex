@@ -89,9 +89,9 @@ To calculate the derivative of the open gate fidelity, we need first define foll
     \item $\ket{F_k} = W_k\cdots W_1\ket{\psi_0}$ for the forward propagation of the initial state with no fluctuation
     \item $\ket{SF_k} = \sum_{i=1}^k W_k\cdots W_{i+1}V_i W_{i-1} \cdots W_1\ket{\psi_0}$ for the forward propagation with a single fluctuation. $\ket{SF_k} = 0$ if $k = 0, 1$
     \item $\ket{DF_k} = \sum_{i,j}W_k\cdots V_i \cdots V_j \cdots W_1\ket{\psi_0}$ for the forward propagation with double fluctuation
-    \item $\bra{B_k} = \bra{\psi} W_N \cdots W_{k+1}$ for the backward propagation of the final state with no fluctuation
-    \item $\bra{SB_k} = \sum_{j}\bra{\psi} W_N \cdots V_j \cdots W_{k+1}$ for the backward propagation with a single fluctuation
-    \item $\bra{DB_k} = \sum_{i,j}\bra{\psi} W_N \cdots V_i \cdots V_j \cdots W_{k+1}$ for the backward propagation with double fluctuation
+    \item $\bra{B_k} = \bra{\psi_T} W_N \cdots W_{k+1}$ for the backward propagation of the target state with no fluctuation
+    \item $\bra{SB_k} = \sum_{j}\bra{\psi_T} W_N \cdots V_j \cdots W_{k+1}$ for the backward propagation with a single fluctuation
+    \item $\bra{DB_k} = \sum_{i,j}\bra{\psi_T} W_N \cdots V_i \cdots V_j \cdots W_{k+1}$ for the backward propagation with double fluctuation
 \end{itemize}
 Then open fidelity can be decomposed by thinking of putting two indistinguishable $V$ to 4 different positions
 \begin{itemize}
@@ -237,7 +237,249 @@ c_{k,a}\|H_{\mathrm{control\_fluc},a}\|_2
 The leading order of the fluctuation effect is $(\sigma_{\mathrm{rms}}T)^2$, define $\kappa_2 = \sigma_{\mathrm{rms}}T$, we require $\kappa_2^2 \ll 1$ for the first order approximation to be valid.
 
 
-\subsection{Gradient with Decoherence}
+\subsection{Decoherence Term}
+For the short time correlation part, the noise is Markovian and is described
+by the Lindblad superoperator
+\begin{equation}
+    \dot{\rho}(t)
+    =
+    -i[H(t),\rho(t)]
+    +
+    \mathcal{L}[\rho(t)] .
+    \label{eq:lindblad_master_for_decoherence}
+\end{equation}
+Let $U(t,0)$ be the Hamiltonian propagator,
+\begin{equation}
+    i\dv{}{t}U(t,0) = H(t)U(t,0),
+    \qquad
+    U(0,0)=I.
+\end{equation}
+The closed-system trajectory is
+\begin{equation}
+    \rho_0(t)
+    =
+    U(t,0)\rho(0)U^\dagger(t,0).
+\end{equation}
+To isolate the decoherence contribution, move to the Hamiltonian interaction
+picture:
+\begin{equation}
+    \rho(t)
+    =
+    U(t,0)\widetilde{\rho}(t)U^\dagger(t,0),
+    \qquad
+    \widetilde{\rho}(t)
+    =
+    U^\dagger(t,0)\rho(t)U(t,0).
+\end{equation}
+Then the Hamiltonian part is removed and the remaining evolution is
+\begin{equation}
+    \partial_t\widetilde{\rho}(t)
+    =
+    \widetilde{\mathcal{L}}(t)[\widetilde{\rho}(t)],
+\end{equation}
+where the interaction-picture Lindblad superoperator is
+\begin{equation}
+    \widetilde{\mathcal{L}}(t)[\widetilde{\rho}]
+    =
+    U^\dagger(t,0)
+    \mathcal{L}\!\left[
+        U(t,0)\widetilde{\rho}U^\dagger(t,0)
+    \right]
+    U(t,0).
+\end{equation}
+
+The integral equation is
+\begin{equation}
+    \widetilde{\rho}(T)
+    =
+    \widetilde{\rho}(0)
+    +
+    \int_0^T
+    \widetilde{\mathcal{L}}(s_1)[\widetilde{\rho}(s_1)]\dd s_1 .
+\end{equation}
+Iterating this equation gives a Dyson expansion in the decoherence strength:
+\begin{align}
+    \widetilde{\rho}(T)
+    =
+    \widetilde{\rho}(0)
+    &+
+    \int_0^T
+    \widetilde{\mathcal{L}}(s_1)[\widetilde{\rho}(0)]\dd s_1
+    \notag\\
+    &+
+    \int_0^T\dd s_1
+    \int_0^{s_1}\dd s_2\,
+    \widetilde{\mathcal{L}}(s_1)
+    \widetilde{\mathcal{L}}(s_2)
+    [\widetilde{\rho}(0)]
+    + \cdots .
+    \label{eq:lindblad_dyson_expansion}
+\end{align}
+Keeping only the first order decoherence correction,
+\begin{equation}
+    \widetilde{\rho}(T)
+    \approx
+    \rho(0)
+    +
+    \int_0^T
+    \widetilde{\mathcal{L}}(s)[\rho(0)]\dd s .
+\end{equation}
+Transforming back to the Schr\"odinger picture gives
+\begin{equation}
+    \rho(T)
+    \approx
+    \rho_0(T)
+    +
+    \int_0^T
+    U(T,s)\,
+    \mathcal{L}[\rho_0(s)]\,
+    U^\dagger(T,s)\dd s,
+    \label{eq:first_order_lindblad_schrodinger}
+\end{equation}
+where $U(T,s)=U(T,0)U^\dagger(s,0)$. This $U(T,s)$ factor is important:
+decoherence happens at the intermediate time $s$, and the remaining control
+pulse still propagates the correction to the final time.
+
+For GRAPE, take $T=N\tau$ and
+\begin{equation}
+    W_k = \exp\{-i\tau H(t_k)\}.
+\end{equation}
+Then
+\begin{align}
+    U(t_k,0) &= W_k W_{k-1}\cdots W_1,\\
+    U(T,t_k) &= W_N W_{N-1}\cdots W_{k+1}.
+\end{align}
+The first order correction becomes
+\begin{equation}
+    \rho(T)
+    \approx
+    \rho_0(T)
+    +
+    \tau
+    \sum_{k=1}^{N}
+    U(T,t_k)\,
+    \mathcal{L}[\rho_0(t_k)]\,
+    U^\dagger(T,t_k).
+    \label{eq:discrete_lindblad_correction}
+\end{equation}
+For a pure initial state $\rho(0)=\ketbra{\psi_0}$, define
+\begin{align}
+    \ket{F_k}
+    &=
+    U(t_k,0)\ket{\psi_0}
+    =
+    W_k\cdots W_1\ket{\psi_0},
+    \\
+    \bra{B_k}
+    &=
+    \bra{\psi_T}U(T,t_k)
+    =
+    \bra{\psi_T}W_N\cdots W_{k+1}.
+\end{align}
+The target-state fidelity is
+\begin{equation}
+    \mathcal{F}
+    =
+    \mel{\psi_T}{\rho(T)}{\psi_T}.
+\end{equation}
+Therefore the first order decoherence correction is localized on each time
+slice:
+\begin{equation}
+    \delta \mathcal{F}_{\mathrm{dec}}
+    =
+    \tau
+    \sum_{k=1}^{N}
+    \mel{B_k}{
+        \mathcal{L}[\ket{F_k}\bra{F_k}]
+    }{B_k}.
+    \label{eq:decoherence_fidelity_correction}
+\end{equation}
+This is the clean GRAPE form: the density matrix does not need to be
+propagated explicitly, because the correction can be contracted using the
+forward state $\ket{F_k}$ and the backward state $\bra{B_k}$.
+
+For one Lindblad jump operator $L$,
+\begin{equation}
+    \mathcal{L}[\rho]
+    =
+    L\rho L^\dagger
+    -
+    \frac{1}{2}L^\dagger L\rho
+    -
+    \frac{1}{2}\rho L^\dagger L .
+\end{equation}
+Substituting $\rho=\ket{F_k}\bra{F_k}$ into
+Eq.~\eqref{eq:decoherence_fidelity_correction} gives
+\begin{align}
+    \delta \mathcal{F}_{\mathrm{dec}}
+    &=
+    \tau
+    \sum_{k=1}^{N}
+    \Big[
+    \abs{\mel{B_k}{L}{F_k}}^2
+        -
+        \frac{1}{2}
+        \mel{B_k}{L^\dagger L}{F_k}
+        \braket{F_k}{B_k}
+        -
+        \frac{1}{2}
+        \braket{B_k}{F_k}
+        \mel{F_k}{L^\dagger L}{B_k}
+    \Big].
+    \label{eq:single_lindblad_decoherence_fidelity}\\
+    \delta \mathcal{F}_{\mathrm{dec}} &= \tau \sum_{j=1}^{N} \mel**{\phi_T}{W_N\cdots J_j \cdots W_1}{\ket{\psi_0}}\mel{\psi_0}{W_1^\dagger \cdots J_j^\dagger \cdots W_N^\dagger}{\phi_T} \\
+    &+\mel**{\phi_T}{W_N\cdots K_j\cdots W_1}{\psi_0}\mel{\psi_0}{U^\dagger(T)}{\phi_T}\notag\\
+     &+\mel{\phi_T}{U(T)}{\psi_0}\mel**{\psi_0}{W_1^\dagger \cdots K_j^\dagger \cdots W_N^\dagger}{\phi_T}\notag\\
+     \pdv{\delta \mathcal{F}_{\mathrm{dec}}}{c(k)} &= \tau \sum_{j=1}^{N}\mel**{\phi_T}{W_N\cdots J_j \dvbar{W_k} \cdots W_1}{\psi_0}\mel{\psi_0}{W_1^\dagger \cdots J_j^\dagger \cdots W_N^\dagger}{\phi_T} \\ 
+     &+ \mel**{\phi_T}{W_N\cdots K_j \dvbar{W_k} \cdots W_1}{\psi_0}\mel{\psi_0}{U^\dagger(T)}{\phi_T}\notag\\
+     &+\mel**{\phi_T}{W_N\cdots \dvbar{W_k} \cdots W_1}{\psi_0}\mel{\psi_0}{W_1^\dagger \cdots K_j^\dagger \cdots W_N^\dagger}{\phi_T} \notag\\
+     &+\text{c.c.}
+\end{align}
+where $J_j = L W_j$ and $K_j = -(1/2)L^\dagger L W_j$. This has form of
+
+For multiple decoherence channels,
+\begin{align}
+    \delta \mathcal{F}_{\mathrm{dec}}
+    &=
+    \tau
+    \sum_{k=1}^{N}
+    \sum_{\mu}
+    \Big[
+        \abs{\mel{B_k}{L_\mu}{F_k}}^2
+        -
+        \frac{1}{2}
+        \mel{B_k}{L_\mu^\dagger L_\mu}{F_k}
+        \braket{F_k}{B_k}
+        -
+        \frac{1}{2}
+        \braket{B_k}{F_k}
+        \mel{F_k}{L_\mu^\dagger L_\mu}{B_k}
+    \Big]
+    \label{eq:multi_lindblad_decoherence_fidelity}\\
+    % &= \tau \sum_{k=1}^{N}\sum_{\mu} \left[ \mel**{B_k}{\left(L_\mu\mel{F_k}{L_\mu^\dagger}{B_k} + (\mathbb{1} - \frac{1}{2}L_\mu^\dagger L_\mu)\mel{F_k}{(\mathbb{1} - \frac{1}{2}L_\mu^\dagger L_\mu)}{B_k}\right)}{F_k} \right]
+    &= \tau \sum_{k=1}^{N}\sum_{\mu}\mel**{B_k}{\left\{\mel{F_k}{L_\mu^\dagger}{B_k}L_\mu -\frac{1}{2}\braket{F_k}{B_k}L_\mu^\dagger L_\mu - \frac{1}{2}\mel{B_k}{L_\mu^\dagger L_\mu}{F_k}\right\}}{F_k}
+    \intertext{denote $x_k = \mel{F_k}{L_\mu^\dagger}{B_k}L_\mu -\frac{1}{2}\braket{F_k}{B_k}L_\mu^\dagger L_\mu - \frac{1}{2}\mel{B_k}{L_\mu^\dagger L_\mu}{F_k}$, we have}
+    \delta \mathcal{F}_{\mathrm{dec}}
+    &=
+    \tau \sum_{k=1}^{N}\sum_{\mu}\mel{B_k}{x_k}{F_k}
+    \label{eq:multi_lindblad_decoherence_fidelity_2}
+\end{align}
+The closed-system fidelity can be written as
+\begin{equation}
+    \mathcal{F}_0
+    =
+    \abs{\braket{B_k}{F_k}}^2,
+\end{equation}
+which is independent of $k$ because the forward and backward pieces compose
+to the full propagator. With decoherence,
+\begin{equation}
+    \mathcal{F}
+    \approx
+    \mathcal{F}_0
+    +
+    \delta \mathcal{F}_{\mathrm{dec}}
+    + O(\tau^2\norm{\mathcal{L}}^2).
+\end{equation}
 
 
 \section{Experiment: Ion Trap and Laser Interaction}
@@ -347,12 +589,12 @@ For the stretch mode, the two ions will move in opposite direction, so the effec
 
 Note that for any unitary familty $V(t)$ ($VV^\dagger = V^\dagger V = \vb 1$,  $V(0) = \vb 1$ and is strong differentiable, i.e., $\dot V$ is well defined w.r.t. strong convergence), we can define a unitary transformation:
 \begin{align*}
-    \ket{\tilde\psi(t)} &= V^\dagger(t)\ket{\psi(t)}\\
-    \tilde H &= V^\dagger H V - i V^\dagger \dot V 
+    \ket{\widetilde\psi(t)} &= V^\dagger(t)\ket{\psi(t)}\\
+    \widetilde H &= V^\dagger H V - i V^\dagger \dot V 
 \end{align*}
 And the SE is preserving:
 \begin{align*}
-    i\partial_t \ket{\tilde\psi(t)} = \tilde H \ket{\tilde\psi(t)}
+    i\partial_t \ket{\widetilde\psi(t)} = \widetilde H \ket{\widetilde\psi(t)}
 \end{align*}
 If the unitary family $V$ is the propagator of a time-dependent Hamiltonian $H_0(t) = f(t)H_0$, it is commuting with itself at different time, i.e., $[H_0(t), H_0(t')] = 0$, then we can drop the time-ordering operator, and get the following transformation:
 \begin{equation}
@@ -360,7 +602,7 @@ If the unitary family $V$ is the propagator of a time-dependent Hamiltonian $H_0
 \end{equation}
 Then the transformed Hamiltonian can be calculated as:
 \begin{align*}
-    \tilde H(t) &= V^\dagger H V - i V^\dagger \dot V \\
+    \widetilde H(t) &= V^\dagger H V - i V^\dagger \dot V \\
     &= V^\dagger H V - i V^\dagger (-ifH_0)V\\
     &= V_t^\dagger (H(t) - f(t)H_0) V_t
 \end{align*}
@@ -368,7 +610,7 @@ Then the transformed Hamiltonian can be calculated as:
 
 Let $H_0(t) = (\delta + \delta't + \phi'_m)  a_k^\dagger a_k$, we can get the following transformation:
 \begin{align*}
-    H_{\text{stretch}} & \to \tilde H_{\text{stretch}} = - (\delta + \delta't + \phi'_m)a_k^\dagger a_k + \frac{\Omega}{2} \eta S_{\phi_s} \otimes (a_k + a_k^\dagger)
+    H_{\text{stretch}} & \to \widetilde H_{\text{stretch}} = - (\delta + \delta't + \phi'_m)a_k^\dagger a_k + \frac{\Omega}{2} \eta S_{\phi_s} \otimes (a_k + a_k^\dagger)
 \end{align*}
 We can use two simple parameter to represent the Hamiltonian $\alpha_1(t),\alpha_2(t)$:
 \begin{align*}

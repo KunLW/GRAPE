@@ -19,6 +19,7 @@ class PerturbativeExpansionDifferentiator(Differentiator):
 
         for step_index, step in enumerate(result.steps):
             previous_forward = result.forward[step_index].components
+            # Adjoint-column form of <B_{k+1}| = <target| W_N ... W_{k+2}.
             next_backward = result.backward[step_index + 1].components
             controls = pulse.controls_at(step_index)
             t = step_index * pulse.dt

@@ -322,7 +322,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
         _noise_term_spec(
             kind="static",
             name="static[0]",
-            coefficient=314.159 * 0.1,
+            coefficient=314.159 * 0.5,
             operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
             definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
             usage="added directly to H_fluctuation",
@@ -330,7 +330,7 @@ def spin_boson_noise_term_specs(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
         _noise_term_spec(
             kind="static",
             name="static[1]",
-            coefficient=300 * 0.1,
+            coefficient=300 * 0.5,
             operator=np.kron(spin_identity, number),
             definition="kron(I_spin, number_operator)",
             usage="added directly to H_fluctuation",

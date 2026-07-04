@@ -50,6 +50,7 @@ class GrapeDifferentiator:
 
     @staticmethod
     def _forward_states(steps, initial_state):
+        """Return states[k] = W_k ... W_1 |initial_state>."""
         states = [initial_state]
         for step_w in steps:
             states.append(step_w @ states[-1])
@@ -57,6 +58,13 @@ class GrapeDifferentiator:
 
     @staticmethod
     def _backward_states(steps, target_state):
+        """Return adjoint-column backward states.
+
+        The mathematical backward object is the bra
+        <B_k| = <target_state| W_N ... W_{k+1}.  For NumPy contractions we
+        store its adjoint column, |bar B_k> = W_{k+1}^dag ... W_N^dag
+        |target_state>, so np.vdot(states[k], x) evaluates <B_k|x>.
+        """
         states = [None] * (len(steps) + 1)
         states[-1] = target_state
         for step_index in reversed(range(len(steps))):

@@ -1321,6 +1321,24 @@ def test_expansion_evolution_returns_ordered_components():
     assert result.forward[-1].components[0].shape == (2,)
 
 
+def test_grape_forward_backward_state_indexing_matches_kth_boundary():
+    w1 = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    w2 = np.array([[1.0, 0.0], [0.0, 1.0j]], dtype=complex)
+    w3 = np.array([[0.0, -1.0j], [1.0j, 0.0]], dtype=complex)
+    steps = [w1, w2, w3]
+    initial_state = np.array([1.0, 0.0], dtype=complex)
+    target_state = np.array([1.0 / np.sqrt(2.0), 1.0j / np.sqrt(2.0)], dtype=complex)
+
+    forward = GrapeDifferentiator._forward_states(steps, initial_state)
+    backward = GrapeDifferentiator._backward_states(steps, target_state)
+
+    assert np.allclose(forward[2], w2 @ w1 @ initial_state)
+    assert np.allclose(backward[2], w3.conj().T @ target_state)
+    local_state = np.array([0.25 - 0.5j, -0.75 + 0.125j], dtype=complex)
+    expected_bra_contraction = target_state.conj().T @ w3 @ local_state
+    assert np.allclose(np.vdot(backward[2], local_state), expected_bra_contraction)
+
+
 def test_ion_trap_fluctuation_hamiltonian_matches_noise_formula():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sy = np.array([[0, -1j], [1j, 0]], dtype=complex)

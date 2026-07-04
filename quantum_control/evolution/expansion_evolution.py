@@ -36,6 +36,7 @@ class PerturbativeExpansionEvolution(Evolution):
         )
 
     def _forward_states(self, steps, initial_state):
+        """Return expansion components with states[k] = W_k ... W_1 |initial>."""
         states = [ExpansionState({0: np.asarray(initial_state, dtype=complex)})]
         for order in range(1, self.max_order + 1):
             states[0].components[order] = np.zeros_like(states[0].components[0])
@@ -52,6 +53,12 @@ class PerturbativeExpansionEvolution(Evolution):
         return states
 
     def _backward_states(self, steps, target_state):
+        """Return adjoint-column backward expansion components.
+
+        Mathematically, <B_k^(0)| = <target| W_N ... W_{k+1}.  The cached
+        component is its adjoint column, which is propagated with daggered
+        future slices and used through np.vdot in gradient contractions.
+        """
         states_by_index = [None] * (len(steps) + 1)
         final_components = {0: np.asarray(target_state, dtype=complex)}
         for order in range(1, self.max_order + 1):

@@ -150,7 +150,16 @@ result.forward[k].components[order]
 
 为了高效计算每个时间片的梯度，代码还会从 target state 反向传播同样的 expansion 阶数。
 
-记 \(B_k^{(n)}\) 为从第 \(k\) 步之后的未来传播反推回来的第 \(n\) 阶 backward state，则：
+数学上，backward state 是 bra：
+
+$$
+\langle B_k^{(0)}|
+= \langle \psi_{\mathrm{target}}| W_N \cdots W_{k+1}
+$$
+
+代码为了使用 NumPy 的列向量和 `np.vdot`，实际缓存的是它的伴随列向量。因此下面的递推写成 dagger 形式；`np.vdot(result.backward[k].components[n], x)` 就是在计算 \(\langle B_k^{(n)}|x\rangle\)。
+
+记代码中缓存的 \(B_k^{(n)}\) 为从第 \(k\) 步之后的未来传播反推回来的第 \(n\) 阶 backward column，则：
 
 $$
 B_k^{(0)}
