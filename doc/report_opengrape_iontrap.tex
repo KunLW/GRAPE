@@ -20,6 +20,23 @@
     U_k = \mathcal{T}\exp\left\{(-i\tau)\int_{t_k}^{t_k+\tau}\dd s\mathcal{H}(s)\right\} \approx \exp\{-i\tau H(t_k)\} + O(\tau^2 \norm{H}^2) \\
 \end{align*}
 We require $\kappa_1 = \tau \norm{H}\ll 1$.
+\begin{lemma}[Recursive Calculation of the Gradient of Perturbative Expectation]
+    For an expetation value of the form 
+    \begin{equation}
+        \mathcal{F}^{(l)} = \sum_{\abs{\alpha}=l} \Gamma^{(n)}_{\alpha}\mel{\psi}{U_N\cdots V_{\alpha_1} \cdots V_{\alpha_l} \cdots U_1}{\phi}
+    \end{equation}
+    then the derivative of $\mathcal{F}$ w.r.t. one time step $c_i(k)$ can be calculated recursively by defining the following states:
+    \begin{align*}
+        &\ket{F^{(0)}_k} = U_k\cdots U_1\ket{\phi_0}, &&\ket{F^{(m)}_k} = U_k\ket{F^{(m)}_{k-1}} + V_k\ket{F^{(m-1)}_{k-1}}\\
+        &\bra{B^{(0)}_k} = \bra{\phi_1}U_N\cdots U_{k+1}, &&\bra{B^{(m)}_k} = \bra{B^{(m)}_{k+1}}U_{k+1} + \bra{B^{(m-1)}_{k+1}}V_{k+1}
+    \end{align*}
+    with specific $l$ boundary condition for those $l$-order state groups.\\
+    The derivative could be simply calculated by the following:
+    \begin{align*}
+        \dvbar{\mathcal{F}^{(m)}} = \pdv{\mathcal{F}^{(m)}}{c_{i}(k)} = \sum_{m+n=l}\braket{B_k^{(m)}}{\dvbar{F_k^{(n)}}},
+    \end{align*}
+\end{lemma}
+Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different responses to certain types of noise.
 \section{Noise: Fluctuation and Decoherence}
 Additional to the original parametrized hamiltonian, we also consider the uncertainty of the system. The hamiltonian is than consider as a function of random variable $\xi$:
 \begin{equation}
