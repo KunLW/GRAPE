@@ -35,10 +35,13 @@ class PerturbativeExpansionEvolution(Evolution):
             metadata={"dt": pulse.dt},
         )
 
-    def _forward_states(self, steps, initial_state):
+    def _forward_states(self, steps, initial_state, seed_components=None):
         states = [ExpansionState({0: np.asarray(initial_state, dtype=complex)})]
         for order in range(1, self.max_order + 1):
             states[0].components[order] = np.zeros_like(states[0].components[0])
+        if seed_components:
+            for order, state in seed_components.items():
+                states[0].components[order] = np.asarray(state, dtype=complex)
 
         for step in steps:
             previous = states[-1].components

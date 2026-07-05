@@ -167,3 +167,35 @@ class ExpansionStateAverageFidelity:
         if self._executor is None:
             self._executor = ProcessPoolExecutor(max_workers=self.n_workers)
         return self._executor
+
+
+class CombinedStateAverageProblem:
+    """Sum of state-average problems evaluated on the same pulse.
+
+    Used to add leading-order noise corrections from different channels, e.g.
+    the fluctuation expansion fidelity plus the Lindblad decoherence
+    correction (with ``include_closed=False`` so the closed term is counted
+    once).
+    """
+
+    def __init__(self, *problems):
+        if not problems:
+            raise ValueError("CombinedStateAverageProblem requires at least one problem.")
+        self.problems = tuple(problems)
+
+    @property
+    def pulse(self):
+        return self.problems[0].pulse
+
+    def value(self, pulse=None):
+        return float(sum(problem.value(pulse) for problem in self.problems))
+
+    def gradient(self, pulse=None):
+        gradient = self.problems[0].gradient(pulse)
+        for problem in self.problems[1:]:
+            gradient = gradient + problem.gradient(pulse)
+        return gradient
+
+    def shutdown(self):
+        for problem in self.problems:
+            problem.shutdown()

@@ -49,6 +49,10 @@ from quantum_control import (
     ExpansionStateAverageFidelity,
     GrapeDifferentiator,
     IonTrapRFSystem,
+    LindbladCorrectedStateFidelity,
+    LindbladExpansionDifferentiator,
+    LindbladExpansionEvolution,
+    LindbladOpenSystem,
     NominalUnitaryEvolution,
     ParameterSmoothPenalty,
     ParameterizedControlProblem,
@@ -70,6 +74,7 @@ from quantum_control import (
     number_operator,
     open_gate_fidelity,
     single_qubit_logical_test_states,
+    spin_boson_collapse_operators,
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
@@ -1774,3 +1779,223 @@ def test_parameterized_problem_applies_slew_penalty_without_changing_pulse():
     assert np.allclose(pulse.amplitudes, physical_amplitudes)
     assert not constraints.is_feasible(pulse.amplitudes)
     assert parameterized_problem.value(parameters) < problem.value()
+
+
+def two_level_lindblad_setup(amplitudes, gamma=0.02, dt=0.05, dW_method="first_order"):
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)
+    collapse_operators = (
+        (np.sqrt(gamma) * sigma_minus, np.sqrt(0.5 * gamma) * sz) if gamma > 0.0 else ()
+    )
+    system = LindbladOpenSystem(
+        drift=0.1 * sz,
+        controls=[sx],
+        collapse_operators=collapse_operators,
+    )
+    pulse = PiecewiseConstantPulse(np.asarray(amplitudes, dtype=float), dt=dt)
+    context = EvolutionContext(
+        initial_state=np.array([1.0, 0.0], dtype=complex),
+        target_state=np.array([1.0, 1.0], dtype=complex) / np.sqrt(2.0),
+        compute_backward=True,
+    )
+    step_builder = UnitaryStepBuilder(dW_method=dW_method)
+    evolution = LindbladExpansionEvolution(step_builder)
+    objective = LindbladCorrectedStateFidelity()
+    differentiator = LindbladExpansionDifferentiator(step_builder)
+    return system, pulse, context, evolution, objective, differentiator
+
+
+def exact_lindblad_final_state(system, pulse, initial_state):
+    from scipy.linalg import expm
+
+    dimension = initial_state.shape[0]
+    identity = np.eye(dimension, dtype=complex)
+    dissipator = np.zeros((dimension**2, dimension**2), dtype=complex)
+    for operator in system.collapse_operators:
+        product = operator.conj().T @ operator
+        dissipator = dissipator + (
+            np.kron(operator, operator.conj())
+            - 0.5 * np.kron(product, identity)
+            - 0.5 * np.kron(identity, product.T)
+        )
+    rho = np.outer(initial_state, initial_state.conj()).reshape(-1)
+    for step_index in range(pulse.n_steps):
+        hamiltonian = system.nominal_hamiltonian(pulse.controls_at(step_index))
+        liouvillian = (
+            -1j * (np.kron(hamiltonian, identity) - np.kron(identity, hamiltonian.T))
+            + dissipator
+        )
+        rho = expm(pulse.dt * liouvillian) @ rho
+    return rho.reshape(dimension, dimension)
+
+
+def test_lindblad_zero_rate_matches_closed_fidelity_and_grape_gradient():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    system, pulse, context, evolution, objective, differentiator = two_level_lindblad_setup(
+        amplitudes, gamma=0.0
+    )
+    result = evolution.evolve(system, pulse, context)
+
+    step_builder = UnitaryStepBuilder()
+    nominal_result = NominalUnitaryEvolution(step_builder).evolve(system, pulse, context)
+    closed_value = StateTransferFidelity(context.target_state).evaluate(nominal_result)
+    grape_gradient = GrapeDifferentiator(step_builder).gradient(
+        system, pulse, context, nominal_result
+    )
+
+    assert np.isclose(objective.evaluate(result), closed_value, rtol=1e-12)
+    assert np.allclose(
+        differentiator.gradient(system, pulse, context, result),
+        grape_gradient,
+        rtol=1e-12,
+        atol=1e-14,
+    )
+
+
+def test_lindblad_correction_amplitude_is_real():
+    amplitudes = np.array([[0.2], [0.25], [0.15], [0.1]])
+    system, pulse, context, evolution, _, _ = two_level_lindblad_setup(amplitudes)
+    result = evolution.evolve(system, pulse, context)
+
+    target_state = result.backward[-1].components[0]
+    correction_amplitude = np.vdot(target_state, result.forward[-1].components[1])
+
+    assert abs(np.imag(correction_amplitude)) < 1e-12 * max(
+        1.0, abs(correction_amplitude)
+    )
+
+
+def test_lindblad_correction_only_flag_splits_closed_term():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    system, pulse, context, evolution, objective, differentiator = two_level_lindblad_setup(
+        amplitudes
+    )
+    result = evolution.evolve(system, pulse, context)
+
+    correction_objective = LindbladCorrectedStateFidelity(include_closed=False)
+    correction_differentiator = LindbladExpansionDifferentiator(include_closed=False)
+    closed_amplitude = np.vdot(
+        result.backward[-1].components[0], result.forward[-1].components[0]
+    )
+
+    assert np.isclose(
+        objective.evaluate(result),
+        correction_objective.evaluate(result) + abs(closed_amplitude) ** 2,
+        rtol=1e-12,
+    )
+    step_builder = UnitaryStepBuilder()
+    nominal_result = NominalUnitaryEvolution(step_builder).evolve(system, pulse, context)
+    grape_gradient = GrapeDifferentiator(step_builder).gradient(
+        system, pulse, context, nominal_result
+    )
+    assert np.allclose(
+        differentiator.gradient(system, pulse, context, result),
+        correction_differentiator.gradient(system, pulse, context, result)
+        + grape_gradient,
+        rtol=1e-10,
+        atol=1e-13,
+    )
+
+
+def test_lindblad_correction_matches_exact_master_equation():
+    rng = np.random.default_rng(7)
+    amplitudes = 0.2 + 0.1 * rng.random((50, 1))
+    gamma = 0.01
+    system, pulse, context, evolution, objective, _ = two_level_lindblad_setup(
+        amplitudes, gamma=gamma, dt=0.04
+    )
+    result = evolution.evolve(system, pulse, context)
+    corrected_value = objective.evaluate(result)
+
+    rho_final = exact_lindblad_final_state(system, pulse, context.initial_state)
+    exact_value = float(
+        np.real(np.vdot(context.target_state, rho_final @ context.target_state))
+    )
+    closed_amplitude = np.vdot(
+        result.backward[-1].components[0], result.forward[-1].components[0]
+    )
+    closed_value = float(abs(closed_amplitude) ** 2)
+
+    gap = abs(exact_value - closed_value)
+    assert gap > 1e-4  # the decoherence effect is resolvable
+    assert abs(corrected_value - exact_value) < 0.2 * gap
+
+
+def test_lindblad_gradient_matches_finite_difference():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    system, pulse, context, evolution, objective, differentiator = two_level_lindblad_setup(
+        amplitudes, dt=0.005
+    )
+    result = evolution.evolve(system, pulse, context)
+
+    analytic = differentiator.gradient(system, pulse, context, result)
+    finite_difference = FiniteDifferenceDifferentiator(
+        evolution,
+        objective,
+        epsilon=1e-6,
+    ).gradient(system, pulse, context)
+
+    assert analytic.shape == amplitudes.shape
+    assert np.allclose(analytic, finite_difference, rtol=2e-2, atol=2e-5)
+
+
+def test_lindblad_gradient_frechet_matches_finite_difference():
+    amplitudes = np.array([[0.2], [0.25], [0.15]])
+    system, pulse, context, evolution, objective, differentiator = two_level_lindblad_setup(
+        amplitudes, dW_method="frechet"
+    )
+    result = evolution.evolve(system, pulse, context)
+
+    analytic = differentiator.gradient(system, pulse, context, result)
+    finite_difference = FiniteDifferenceDifferentiator(
+        evolution,
+        objective,
+        epsilon=1e-6,
+    ).gradient(system, pulse, context)
+
+    assert analytic.shape == amplitudes.shape
+    assert np.allclose(analytic, finite_difference, rtol=1e-6, atol=1e-9)
+
+
+def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
+    n_levels = 2
+    dimension = 4 * n_levels
+    collapse_operators = spin_boson_collapse_operators(
+        n_levels,
+        gamma_heating=0.5,
+        gamma_motional_dephasing=0.2,
+    )
+    system = spin_boson_control_system(
+        n_levels=n_levels,
+        phi_s=0.0,
+        collapse_operators=collapse_operators,
+    )
+    pulse = PiecewiseConstantPulse(np.full((3, 2), 0.02), dt=0.005)
+    step_builder = UnitaryStepBuilder()
+    state_pairs = [
+        StatePair(
+            np.eye(dimension, dtype=complex)[0],
+            np.eye(dimension, dtype=complex)[3 * n_levels],
+        ),
+        StatePair(
+            np.eye(dimension, dtype=complex)[n_levels],
+            np.eye(dimension, dtype=complex)[2 * n_levels],
+        ),
+    ]
+    problem = ExpansionStateAverageFidelity(
+        system=system,
+        pulse=pulse,
+        evolution=LindbladExpansionEvolution(step_builder),
+        objective=LindbladCorrectedStateFidelity(),
+        differentiator=LindbladExpansionDifferentiator(step_builder),
+        state_pairs=state_pairs,
+    )
+
+    assert isinstance(system, LindbladOpenSystem)
+    assert len(collapse_operators) == 2
+    value = problem.value()
+    gradient = problem.gradient()
+    assert np.isfinite(value)
+    assert gradient.shape == pulse.amplitudes.shape
+    assert np.all(np.isfinite(gradient))

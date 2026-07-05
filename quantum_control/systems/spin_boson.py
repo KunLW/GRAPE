@@ -5,6 +5,7 @@ import numpy as np
 from quantum_control.pulses.parameterization import BoundedAmplitudeParameterization
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems.closed_system import FluctuatingClosedSystem
+from quantum_control.systems.open_system import LindbladOpenSystem
 
 DEFAULT_LAMB_DICKE_ETA = 0.075
 DEFAULT_ALPHA1_KHZ_BOUNDS = (1.0, 60.0)
@@ -51,6 +52,41 @@ def two_qubit_spin_phase_difference(phi_s):
     return two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
 
 
+def spin_boson_collapse_operators(
+    n_levels,
+    gamma_heating=0.0,
+    gamma_motional_dephasing=0.0,
+    gamma_spin_dephasing=0.0,
+):
+    r"""Build scaled jump operators $L = \sqrt{\gamma}\,A$ for the spin-boson system.
+
+    Heating uses $A = I_{\mathrm{spin}} \otimes a^\dagger$, motional dephasing
+    $A = I_{\mathrm{spin}} \otimes a^\dagger a$, and collective spin dephasing
+    $A = \tfrac{1}{2}(\sigma_z \otimes I + I \otimes \sigma_z) \otimes I_{\mathrm{motion}}$.
+    Rates are angular frequencies (rad/s); zero-rate channels are omitted.
+    """
+
+    spin_identity = np.eye(4, dtype=complex)
+    single_identity = np.eye(2, dtype=complex)
+    motion_identity = np.eye(n_levels, dtype=complex)
+    sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
+    sz_collective = 0.5 * (np.kron(sz, single_identity) + np.kron(single_identity, sz))
+
+    channels = [
+        (gamma_heating, np.kron(spin_identity, creation_operator(n_levels))),
+        (gamma_motional_dephasing, np.kron(spin_identity, number_operator(n_levels))),
+        (gamma_spin_dephasing, np.kron(sz_collective, motion_identity)),
+    ]
+    operators = []
+    for gamma, operator in channels:
+        gamma = float(gamma)
+        if gamma < 0.0:
+            raise ValueError("decoherence rates must be non-negative.")
+        if gamma > 0.0:
+            operators.append(np.sqrt(gamma) * operator)
+    return operators
+
+
 def spin_boson_control_system(
     n_levels,
     phi_s,
@@ -58,6 +94,7 @@ def spin_boson_control_system(
     eta=DEFAULT_LAMB_DICKE_ETA,
     static_fluctuations=(),
     control_fluctuations=(),
+    collapse_operators=(),
 ):
     """Build the two-channel spin-boson Hamiltonian with optional fluctuations.
 
@@ -79,12 +116,22 @@ def spin_boson_control_system(
     x1 = 0.5 * (a + adag)
     dimension = 4 * n_levels
 
+    drift = np.zeros((dimension, dimension), dtype=complex)
+    controls = [
+        np.kron(spin_identity, adag @ a),
+        float(eta) * np.kron(two_qubit_spin_phase_mode(phi_s, mode_vector), x1),
+    ]
+    if len(collapse_operators):
+        return LindbladOpenSystem(
+            drift=drift,
+            controls=controls,
+            static_fluctuations=static_fluctuations,
+            control_fluctuations=control_fluctuations,
+            collapse_operators=tuple(collapse_operators),
+        )
     return FluctuatingClosedSystem(
-        drift=np.zeros((dimension, dimension), dtype=complex),
-        controls=[
-            np.kron(spin_identity, adag @ a),
-            float(eta) * np.kron(two_qubit_spin_phase_mode(phi_s, mode_vector), x1),
-        ],
+        drift=drift,
+        controls=controls,
         static_fluctuations=static_fluctuations,
         control_fluctuations=control_fluctuations,
     )

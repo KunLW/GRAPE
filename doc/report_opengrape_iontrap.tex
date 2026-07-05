@@ -42,8 +42,14 @@ Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different 
     Here we give three examples, the first one is the Markovian noise, the second one is the quasi-static noise, and the third one is non-Markovian noise. 
     \begin{enumerate}
     \item Markovian with perturbation condition: $T\norm{\mathcal{L}} < 1$.
+    % REVIEW: conjugation error in the last term of x_k -- it should be
+    % -\frac{1}{2}\mel{F_k}{L_\mu^\dagger L_\mu}{B_k} (the conjugate of what is written).
+    % As written, the last two terms contract to -b_k Re(s) instead of the correct
+    % -Re(b_k s^*), with b_k = <B_k|L^dag L|F_k> and s = <B_k|F_k>: the correction loses
+    % realness and the gradient built on it is wrong. Same error at
+    % eq. (multi_lindblad_decoherence_fidelity_2). See doc/lindblad_note.md.
     \begin{align*}
-        \abs{\alpha} =1, \qquad 
+        \abs{\alpha} =1, \qquad
         V_k = x_k = \mel{F_k}{L_\mu^\dagger}{B_k}L_\mu -\frac{1}{2}\braket{F_k}{B_k}L_\mu^\dagger L_\mu - \frac{1}{2}\mel{B_k}{L_\mu^\dagger L_\mu}{F_k}
     \end{align*}
     \item Fluctuation with perturbation condition: $T\norm{H_{\text{fluc}}} < 1$.
@@ -474,6 +480,7 @@ Eq.~\eqref{eq:decoherence_fidelity_correction} gives
      &+\mel**{\phi_T}{W_N\cdots \dvbar{W_k} \cdots W_1}{\psi_0}\mel{\psi_0}{W_1^\dagger \cdots K_j^\dagger \cdots W_N^\dagger}{\phi_T} \notag\\
      &+\text{c.c.}
 \end{align}
+% REVIEW: dangling sentence "This has form of" -- incomplete.
 where $J_j = L W_j$ and $K_j = -(1/2)L^\dagger L W_j$. This has form of
 
 For multiple decoherence channels,
@@ -496,6 +503,12 @@ For multiple decoherence channels,
     \Big]
     \label{eq:multi_lindblad_decoherence_fidelity}\\
     % &= \tau \sum_{k=1}^{N}\sum_{\mu} \left[ \mel**{B_k}{\left(L_\mu\mel{F_k}{L_\mu^\dagger}{B_k} + (\mathbb{1} - \frac{1}{2}L_\mu^\dagger L_\mu)\mel{F_k}{(\mathbb{1} - \frac{1}{2}L_\mu^\dagger L_\mu)}{B_k}\right)}{F_k} \right]
+    % REVIEW: conjugation error -- the last scalar in the braces (and in x_k below)
+    % must be -\frac{1}{2}\mel{F_k}{L_\mu^\dagger L_\mu}{B_k}, i.e. the conjugate of
+    % what is written, to reproduce eq. (multi_lindblad_decoherence_fidelity) above:
+    % <B|x|F> then gives |a|^2 - Re(b s^*) with a = <B|L|F>, b = <B|L^dag L|F>,
+    % s = <B|F>. As written it gives |a|^2 - b Re(s), which is complex in general.
+    % The implementation (quantum_control/, doc/lindblad_note.md) uses the corrected form.
     &= \tau \sum_{k=1}^{N}\sum_{\mu}\mel**{B_k}{\left\{\mel{F_k}{L_\mu^\dagger}{B_k}L_\mu -\frac{1}{2}\braket{F_k}{B_k}L_\mu^\dagger L_\mu - \frac{1}{2}\mel{B_k}{L_\mu^\dagger L_\mu}{F_k}\right\}}{F_k}
     \intertext{denote $x_k = \mel{F_k}{L_\mu^\dagger}{B_k}L_\mu -\frac{1}{2}\braket{F_k}{B_k}L_\mu^\dagger L_\mu - \frac{1}{2}\mel{B_k}{L_\mu^\dagger L_\mu}{F_k}$, we have}
     \delta \mathcal{F}_{\mathrm{dec}}
@@ -519,11 +532,22 @@ to the full propagator. With decoherence,
     \delta \mathcal{F}_{\mathrm{dec}}
     + O(\tau^2\norm{\mathcal{L}}^2).
 \end{equation}
-The derivative is then be 
+The derivative is then be
+% REVIEW: two issues in the derivative line. (a) The second term should be
+% \braket{B_k^{(1)}}{\dvbar{F_k^{(0)}}} (the single-insertion backward state paired
+% with the derivative of the plain forward chain), consistent with the lemma
+% \dvbar{\mathcal{F}^{(l)}} = \sum_{m+n=l}\braket{B_k^{(m)}}{\dvbar{F_k^{(n)}}},
+% not the derivative of B^{(1)}; the diagonal insertion contribution
+% <B_k^{(0)}|x_k\dvbar{W_k}|F_{k-1}^{(0)}> from \dvbar{V_k} = x_k\dvbar{W_k} enters
+% through \dvbar{F_k^{(1)}}. (b) This recursion is exact only with the
+% frozen-coefficient reading: the scalars inside x_k depend on all controls, but
+% freezing them and adding +c.c. reproduces the exact gradient term-by-term,
+% provided the conjugation of x_k flagged above is corrected.
+% See doc/lindblad_note.md, Sec. 6, for the verified statement.
 \begin{align*}
     \pdv{\mathcal{F}}{c(k)} = \braket{B_k}{\dvbar{F_k^{(1)}}} + \braket{\dvbar{B_k^{(1)}}}{F_k} + \text{c.c.}
 \end{align*}
-where $F_k^{(1)} = x_k W_k\ket{F_{k-1}} + W_k\ket{F_{k-1}^{(1)}}$ 
+where $F_k^{(1)} = x_k W_k\ket{F_{k-1}} + W_k\ket{F_{k-1}^{(1)}}$
 \section{Experiment: Ion Trap and Laser Interaction}
 Consider a system of $2$ ions in a linear trap (Paul trap). There exist two collective motional modes along each axis: the COM mode and the stretch mode. The COM mode is the one where the two ions move in phase, while the stretch mode is the one where they move out of phase. The frequencies of these modes are different. The COM mode has a frequency $\omega_{COM}$, while the stretch mode has a frequency $\omega_{stretch}$. 
 If an outer magnetic field is applied, ions will have a Zeeman splitting. The qubit could be encoded in this Zeeman splitting level, directly by two fine structure levels. The first will use radio frequency (RF) to drive the transition between the two levels. The second will use Raman transition to drive the transition between the two levels.

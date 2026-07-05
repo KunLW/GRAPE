@@ -28,12 +28,16 @@ from experiments.reporting import (
     timestamped_experiment_dir,
 )
 from quantum_control import (
+    CombinedStateAverageProblem,
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     EvolutionContext,
+    LindbladCorrectedStateFidelity,
+    LindbladExpansionDifferentiator,
+    LindbladExpansionEvolution,
     NominalUnitaryEvolution,
     ParameterSmoothPenalty,
     ParameterizedControlProblem,
@@ -50,6 +54,7 @@ from quantum_control import (
     ms_xx_pi_over_2_gate,
     number_operator,
     open_gate_fidelity,
+    spin_boson_collapse_operators,
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
@@ -72,6 +77,17 @@ class SystemConfig:
     phi_s: float = 0.0
     eta: float = DEFAULT_LAMB_DICKE_ETA
     include_fluctuations: bool = True
+    gamma_heating: float = 0.0
+    gamma_motional_dephasing: float = 0.0
+    gamma_spin_dephasing: float = 0.0
+
+    @property
+    def include_decoherence(self):
+        return (
+            self.gamma_heating > 0.0
+            or self.gamma_motional_dephasing > 0.0
+            or self.gamma_spin_dephasing > 0.0
+        )
 
 
 @dataclass(frozen=True)
@@ -450,12 +466,33 @@ def parse_args(argv=None):
         action="store_true",
         help="Run optimization without fluctuation terms.",
     )
+    parser.add_argument(
+        "--gamma-heating",
+        type=float,
+        default=defaults.system.gamma_heating,
+        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†.",
+    )
+    parser.add_argument(
+        "--gamma-motional-dephasing",
+        type=float,
+        default=defaults.system.gamma_motional_dephasing,
+        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a.",
+    )
+    parser.add_argument(
+        "--gamma-spin-dephasing",
+        type=float,
+        default=defaults.system.gamma_spin_dephasing,
+        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2.",
+    )
     args = parser.parse_args(argv)
     return replace(
         defaults,
         system=replace(
             defaults.system,
             include_fluctuations=not args.close_grape,
+            gamma_heating=args.gamma_heating,
+            gamma_motional_dephasing=args.gamma_motional_dephasing,
+            gamma_spin_dephasing=args.gamma_spin_dephasing,
         ),
         pulse=replace(defaults.pulse, n_steps=args.n_steps),
         optimizer=replace(defaults.optimizer, maxiter=args.maxiter),
@@ -846,6 +883,11 @@ def append_optimization_results_report(
                     metrics["initial_open_gate_fidelity"],
                     metrics["final_open_gate_fidelity"],
                 ),
+                _result_row(
+                    "decoherence_correction",
+                    metrics.get("initial_decoherence_correction", 0.0),
+                    metrics.get("final_decoherence_correction", 0.0),
+                ),
                 _result_row("l1_penalty", metrics["initial_l1_penalty"], metrics["final_l1_penalty"]),
                 _result_row("l2_penalty", metrics["initial_l2_penalty"], metrics["final_l2_penalty"]),
                 _result_row(
@@ -914,7 +956,7 @@ def noise_term_rows(system, specs):
     return rows
 
 
-def calculate_kappa_metrics(system, noisy_system, pulse, parameterization):
+def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, collapse_operators=()):
     lower, upper = parameterization.base._bounds_for(pulse.amplitudes.shape)
     channel_bounds = tuple(zip(lower[0], upper[0], strict=True))
     boundary_controls = np.asarray(
@@ -936,9 +978,17 @@ def calculate_kappa_metrics(system, noisy_system, pulse, parameterization):
     kappa_1_corner = int(np.argmax(nominal_norms)) if nominal_norms.size else 0
     kappa_2_corner = int(np.argmax(fluctuation_norms)) if fluctuation_norms.size else 0
     total_time = float(pulse.n_steps * pulse.dt)
+    lindblad_norm = float(
+        sum(
+            np.linalg.norm(np.asarray(operator).conj().T @ np.asarray(operator), ord=2)
+            for operator in collapse_operators
+        )
+    )
     return {
         "kappa_1": float(pulse.dt * nominal_norms[kappa_1_corner]),
         "kappa_2": float(total_time * fluctuation_norms[kappa_2_corner]),
+        "kappa_3": float(total_time * lindblad_norm),
+        "kappa_3_lindblad_norm": lindblad_norm,
         "kappa_1_corner": kappa_1_corner,
         "kappa_2_corner": kappa_2_corner,
         "kappa_1_alpha": tuple(float(value) for value in boundary_controls[kappa_1_corner]),
@@ -1214,13 +1264,52 @@ def build_parameterization(config, pulse):
     )
 
 
+def build_collapse_operators(config):
+    if not config.system.include_decoherence:
+        return []
+    return spin_boson_collapse_operators(
+        config.system.n_levels,
+        gamma_heating=config.system.gamma_heating,
+        gamma_motional_dephasing=config.system.gamma_motional_dephasing,
+        gamma_spin_dephasing=config.system.gamma_spin_dephasing,
+    )
+
+
+def build_decoherence_correction_problem(
+    config,
+    noisy_system,
+    pulse,
+    state_pairs,
+    collapse_operators,
+    include_closed=False,
+    n_workers=None,
+):
+    step_builder = UnitaryStepBuilder()
+    return ExpansionStateAverageFidelity(
+        system=noisy_system,
+        pulse=pulse,
+        evolution=LindbladExpansionEvolution(
+            step_builder,
+            collapse_operators=collapse_operators,
+        ),
+        objective=LindbladCorrectedStateFidelity(include_closed=include_closed),
+        differentiator=LindbladExpansionDifferentiator(
+            step_builder,
+            include_closed=include_closed,
+        ),
+        state_pairs=state_pairs,
+        normalize_weights=config.objective.normalize_weights,
+        n_workers=config.runtime.workers if n_workers is None else n_workers,
+    )
+
+
 def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(
         max_order=config.objective.max_order,
         drop_odd_average=config.objective.drop_odd_average,
     )
-    return ExpansionStateAverageFidelity(
+    expansion_problem = ExpansionStateAverageFidelity(
         system=noisy_system,
         pulse=initial_pulse,
         evolution=PerturbativeExpansionEvolution(
@@ -1236,6 +1325,18 @@ def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
         normalize_weights=config.objective.normalize_weights,
         n_workers=config.runtime.workers,
     )
+    collapse_operators = build_collapse_operators(config)
+    if not collapse_operators:
+        return expansion_problem
+    decoherence_problem = build_decoherence_correction_problem(
+        config,
+        noisy_system,
+        initial_pulse,
+        state_pairs,
+        collapse_operators,
+        include_closed=False,
+    )
+    return CombinedStateAverageProblem(expansion_problem, decoherence_problem)
 
 
 def build_optimizer(config):
@@ -1272,6 +1373,7 @@ def run_perturbative_experiment(
             print(warning, file=sys.stderr, flush=True)
     target_gate = ms_xx_pi_over_2_gate()
     state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+    collapse_operators = build_collapse_operators(config)
     optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
@@ -1362,7 +1464,35 @@ def run_perturbative_experiment(
         ("initial_l1_penalty", initial_l1_penalty),
         ("initial_l2_penalty", initial_l2_penalty),
     ]
-    kappa_metrics = calculate_kappa_metrics(system, noisy_system, masked_initial_pulse, parameterization)
+
+    def decoherence_correction(pulse):
+        if not collapse_operators:
+            return 0.0
+        correction_problem = build_decoherence_correction_problem(
+            config,
+            noisy_system,
+            pulse,
+            state_pairs,
+            collapse_operators,
+            include_closed=False,
+            n_workers=1,
+        )
+        try:
+            return correction_problem.value(pulse)
+        finally:
+            correction_problem.shutdown()
+
+    if collapse_operators:
+        initial_preview_metrics.append(
+            ("initial_decoherence_correction", decoherence_correction(masked_initial_pulse))
+        )
+    kappa_metrics = calculate_kappa_metrics(
+        system,
+        noisy_system,
+        masked_initial_pulse,
+        parameterization,
+        collapse_operators=collapse_operators,
+    )
     write_optimization_preview_report(
         report_path,
         generated_at=generated_at,
@@ -1556,6 +1686,9 @@ def run_perturbative_experiment(
         RAD_S_PER_KHZ,
     )
 
+    initial_decoherence_correction = decoherence_correction(masked_initial_pulse)
+    final_decoherence_correction = decoherence_correction(final_pulse)
+
     metrics = {
         "initial_fidelity": initial_single_state_fidelity,
         "final_fidelity": final_single_state_fidelity,
@@ -1563,6 +1696,8 @@ def run_perturbative_experiment(
         "final_close_gate_fidelity": final_close_gate_fidelity,
         "initial_open_gate_fidelity": initial_open_gate_fidelity,
         "final_open_gate_fidelity": final_open_gate_fidelity,
+        "initial_decoherence_correction": initial_decoherence_correction,
+        "final_decoherence_correction": final_decoherence_correction,
         "initial_l1_penalty": initial_l1_penalty,
         "final_l1_penalty": final_l1_penalty,
         "initial_l2_penalty": initial_l2_penalty,
@@ -1805,6 +1940,22 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         "close_gate_fidelity": close_fidelity,
         "open_gate_fidelity": open_fidelity,
     }
+    collapse_operators = build_collapse_operators(config)
+    if collapse_operators:
+        state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+        correction_problem = build_decoherence_correction_problem(
+            config,
+            noisy_system,
+            evaluated_pulse,
+            state_pairs,
+            collapse_operators,
+            include_closed=False,
+            n_workers=1,
+        )
+        try:
+            metrics["decoherence_correction"] = correction_problem.value(evaluated_pulse)
+        finally:
+            correction_problem.shutdown()
     outputs = {
         "evaluated_pulse_npz": pulse_npz_path,
         "evaluated_pulse_csv": pulse_csv_path,

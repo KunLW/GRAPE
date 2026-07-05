@@ -10,7 +10,11 @@ from quantum_control.gate_metrics import (
 from quantum_control.parameterized_problem import ParameterizedControlProblem
 from quantum_control.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
 from quantum_control.problem import ControlProblem
-from quantum_control.state_average import ExpansionStateAverageFidelity, StatePair
+from quantum_control.state_average import (
+    CombinedStateAverageProblem,
+    ExpansionStateAverageFidelity,
+    StatePair,
+)
 from quantum_control.pulses.constraints import PulseConstraints
 from quantum_control.pulses.parameterization import (
     BoundedAmplitudeParameterization,
@@ -20,6 +24,7 @@ from quantum_control.pulses.parameterization import (
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems.closed_system import ClosedSystem, FluctuatingClosedSystem
 from quantum_control.systems.ion_trap_rf import IonTrapRFSystem
+from quantum_control.systems.open_system import LindbladOpenSystem
 from quantum_control.systems.spin_boson import (
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
@@ -27,6 +32,7 @@ from quantum_control.systems.spin_boson import (
     annihilation_operator,
     creation_operator,
     number_operator,
+    spin_boson_collapse_operators,
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
@@ -38,15 +44,20 @@ from quantum_control.steps.unitary_step import UnitaryStepBuilder
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
 from quantum_control.evolution.nominal_evolution import NominalUnitaryEvolution
 from quantum_control.evolution.expansion_evolution import PerturbativeExpansionEvolution
+from quantum_control.evolution.lindblad_evolution import LindbladExpansionEvolution
 from quantum_control.objectives.state_fidelity import StateTransferFidelity
 from quantum_control.objectives.expansion_fidelity import (
     ExpansionFidelity,
     SecondOrderFluctuationFidelity,
 )
+from quantum_control.objectives.lindblad_fidelity import LindbladCorrectedStateFidelity
 from quantum_control.differentiators.expansion_differentiator import (
     PerturbativeExpansionDifferentiator,
 )
 from quantum_control.differentiators.grape import GrapeDifferentiator
+from quantum_control.differentiators.lindblad_differentiator import (
+    LindbladExpansionDifferentiator,
+)
 from quantum_control.diagnostics.error_budget import (
     ErrorBudgetConfig,
     ErrorBudgetReport,
@@ -57,6 +68,7 @@ from quantum_control.diagnostics.error_budget import (
 
 __all__ = [
     "ClosedSystem",
+    "CombinedStateAverageProblem",
     "FluctuatingClosedSystem",
     "BoundedAmplitudeParameterization",
     "ControlProblem",
@@ -70,6 +82,10 @@ __all__ = [
     "ExpansionStateAverageFidelity",
     "GrapeDifferentiator",
     "IonTrapRFSystem",
+    "LindbladCorrectedStateFidelity",
+    "LindbladExpansionDifferentiator",
+    "LindbladExpansionEvolution",
+    "LindbladOpenSystem",
     "MaskedPulseParameterization",
     "NominalUnitaryEvolution",
     "ParameterizedControlProblem",
@@ -95,6 +111,7 @@ __all__ = [
     "number_operator",
     "open_gate_fidelity",
     "single_qubit_logical_test_states",
+    "spin_boson_collapse_operators",
     "spin_boson_control_system",
     "spin_boson_initial_pulse",
     "spin_boson_parameterization",
