@@ -29,9 +29,6 @@ from experiments.reporting import (
 )
 from quantum_control import (
     CombinedStateAverageProblem,
-    DEFAULT_ALPHA1_KHZ_BOUNDS,
-    DEFAULT_ALPHA2_KHZ_BOUNDS,
-    DEFAULT_LAMB_DICKE_ETA,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     EvolutionContext,
@@ -47,21 +44,15 @@ from quantum_control import (
     PerturbativeStepBuilder,
     StateTransferFidelity,
     UnitaryStepBuilder,
-    annihilation_operator,
     closed_gate_fidelity,
-    creation_operator,
     motion_resolved_gate_state_pairs,
-    ms_xx_pi_over_2_gate,
-    number_operator,
     open_gate_fidelity,
-    spin_boson_collapse_operators,
-    spin_boson_control_system,
-    spin_boson_initial_pulse,
-    spin_boson_parameterization,
-    two_qubit_spin_phase_mode,
 )
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
+
+from experiments_improved.config_io import load_experiment_config, write_config_snapshot
+from experiments_improved.systems import get_system
 
 N_LEVELS = 6
 N_STEPS = 200
@@ -71,31 +62,32 @@ DEFAULT_L1_SMOOTH_WEIGHT = 0.0005
 DEFAULT_L2_SMOOTH_WEIGHT = 0.0001
 
 
-@dataclass(frozen=True)
-class SystemConfig:
-    n_levels: int = N_LEVELS
-    phi_s: float = 0.0
-    eta: float = DEFAULT_LAMB_DICKE_ETA
-    include_fluctuations: bool = True
-    gamma_heating: float = 0.0
-    gamma_motional_dephasing: float = 0.0
-    gamma_spin_dephasing: float = 0.0
+def _default_system_params():
+    return get_system("spin_boson").default_params()
 
-    @property
-    def include_decoherence(self):
-        return (
-            self.gamma_heating > 0.0
-            or self.gamma_motional_dephasing > 0.0
-            or self.gamma_spin_dephasing > 0.0
-        )
+
+def _default_system_noise():
+    return get_system("spin_boson").default_noise()
+
+
+@dataclass(frozen=True)
+class SystemSelection:
+    """Pluggable physical system: registry key plus its params/noise configs.
+
+    ``type`` selects the system definition (see ``systems/``); ``params`` and
+    ``noise`` are that system's frozen dataclasses, so their YAML schema is
+    owned by the system module rather than this driver.
+    """
+
+    type: str = "spin_boson"
+    params: object = field(default_factory=_default_system_params)
+    noise: object = field(default_factory=_default_system_noise)
 
 
 @dataclass(frozen=True)
 class PulseConfig:
     n_steps: int = N_STEPS
     total_time_us: float = 225.8
-    alpha1_khz_bounds: tuple[float, float] = DEFAULT_ALPHA1_KHZ_BOUNDS
-    alpha2_khz_bounds: tuple[float, float] = DEFAULT_ALPHA2_KHZ_BOUNDS
     random_seed: int | None = None
 
 
@@ -148,7 +140,7 @@ class OutputConfig:
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    system: SystemConfig = field(default_factory=SystemConfig)
+    system: SystemSelection = field(default_factory=SystemSelection)
     pulse: PulseConfig = field(default_factory=PulseConfig)
     objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -205,11 +197,22 @@ def default_experiment_config():
     return ExperimentConfig()
 
 
+def _with_fluctuations_enabled(system_selection, enabled):
+    noise = system_selection.noise
+    return replace(
+        system_selection,
+        noise=replace(
+            noise,
+            fluctuations=replace(noise.fluctuations, enabled=bool(enabled)),
+        ),
+    )
+
+
 def no_fluctuation_experiment_config():
     config = default_experiment_config()
     return replace(
         config,
-        system=replace(config.system, include_fluctuations=False),
+        system=_with_fluctuations_enabled(config.system, False),
     )
 
 
@@ -220,13 +223,27 @@ def _coerce_experiment_config(config):
         return config
 
     defaults = default_experiment_config()
-    return ExperimentConfig(
-        system=replace(
-            defaults.system,
-            include_fluctuations=bool(
-                getattr(config, "include_fluctuations", defaults.system.include_fluctuations)
+    system = defaults.system
+    if hasattr(config, "include_fluctuations"):
+        system = _with_fluctuations_enabled(system, config.include_fluctuations)
+    gamma_names = ("gamma_heating", "gamma_motional_dephasing", "gamma_spin_dephasing")
+    gamma_updates = {
+        name: float(getattr(config, name))
+        for name in gamma_names
+        if getattr(config, name, 0.0)
+    }
+    if gamma_updates:
+        system = replace(
+            system,
+            noise=replace(
+                system.noise,
+                decoherence=replace(
+                    system.noise.decoherence, enabled=True, **gamma_updates
+                ),
             ),
-        ),
+        )
+    return ExperimentConfig(
+        system=system,
         pulse=replace(
             defaults.pulse,
             n_steps=int(getattr(config, "n_steps", defaults.pulse.n_steps)),
@@ -313,231 +330,175 @@ def ms_bell_target_motion_ground(n_levels):
     return target
 
 
-def spin_boson_noisy_control_system(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
-    specs = spin_boson_noise_term_specs(n_levels, phi_s, eta=eta)
-    return spin_boson_control_system(
-        n_levels=n_levels,
-        phi_s=phi_s,
-        eta=eta,
-        static_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "static"],
-        control_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "control"],
-    )
-
-
-def spin_boson_noise_term_specs(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
-    spin_identity = np.eye(4, dtype=complex)
-    motion_identity = np.eye(n_levels, dtype=complex)
-    single_identity = np.eye(2, dtype=complex)
-    sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
-    sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
-    number = number_operator(n_levels)
-    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
-    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
-
-    return [
-        _noise_term_spec(
-            kind="static",
-            name="static[0]",
-            coefficient=314.159 * 0.1,
-            operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
-            definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="static",
-            name="static[1]",
-            coefficient=300 * 0.1,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="control[0]",
-            coefficient=0.0001,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="alpha1(t) * control[0]",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="control[1]",
-            coefficient=0.0001,
-            operator=eta * np.kron(s_phi, x1),
-            definition=f"eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta={eta:.12g}",
-            usage="alpha2(t) * control[1]",
-        ),
-    ]
-
-
-def _noise_term_spec(kind, name, coefficient, operator, definition, usage):
-    coefficient = float(coefficient)
-    operator = np.asarray(operator, dtype=complex)
-    return {
-        "kind": kind,
-        "name": name,
-        "coefficient": coefficient,
-        "operator": operator,
-        "definition": definition,
-        "usage": usage,
-        "matrix": coefficient * operator,
-    }
-
-
-class Alpha2EndpointZeroParameterization:
-    def __init__(self, base):
-        self.base = base
-
-    def to_physical(self, normalized):
-        amplitudes = self.base.to_physical(normalized)
-        amplitudes[[0, -1], 1] = 0.0
-        return amplitudes
-
-    def to_parameters(self, amplitudes):
-        parameters = self.base.to_parameters(amplitudes)
-        lower, upper = self.base._bounds_for(amplitudes.shape)
-        parameters[[0, -1], 1] = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
-        return parameters
-
-    def pullback_gradient(self, physical_gradient):
-        gradient = self.base.pullback_gradient(physical_gradient)
-        gradient[[0, -1], 1] = 0.0
-        return gradient
-
-    def parameter_bounds(self, shape):
-        bounds = self.base.parameter_bounds(shape)
-        lower, upper = self.base._bounds_for(shape)
-        endpoint_value = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
-        for row, value in zip((0, shape[0] - 1), endpoint_value):
-            bounds[np.ravel_multi_index((row, 1), shape)] = (float(value), float(value))
-        return bounds
-
-    @staticmethod
-    def _normalized_zero(lower, upper):
-        return (0.0 - 0.5 * (upper + lower)) / (0.5 * (upper - lower))
+def _load_base_config(config_path):
+    if config_path is None:
+        return default_experiment_config()
+    return load_experiment_config(config_path, default_experiment_config(), get_system)
 
 
 def parse_args(argv=None):
-    defaults = default_experiment_config()
     parser = argparse.ArgumentParser(
         description="Run spin-boson perturbative open-gate L-BFGS-B experiment."
     )
-    parser.add_argument("--maxiter", type=int, default=defaults.optimizer.maxiter)
-    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
     parser.add_argument(
-        "--l1-smooth-weight",
-        type=float,
-        default=defaults.penalty.l1_smooth_weight,
+        "--config",
+        type=Path,
+        default=None,
+        help="YAML experiment configuration file; explicit flags override it.",
     )
-    parser.add_argument(
-        "--l2-smooth-weight",
-        type=float,
-        default=defaults.penalty.l2_smooth_weight,
-    )
+    suppress = argparse.SUPPRESS
+    parser.add_argument("--maxiter", type=int, default=suppress)
+    parser.add_argument("--n-steps", type=int, default=suppress)
+    parser.add_argument("--l1-smooth-weight", type=float, default=suppress)
+    parser.add_argument("--l2-smooth-weight", type=float, default=suppress)
     parser.add_argument(
         "--workers",
         type=int,
-        default=defaults.runtime.workers,
+        default=suppress,
         help="Number of worker processes for perturbative state-pair averaging.",
     )
     parser.add_argument(
         "--print-step",
         action="store_true",
+        default=suppress,
         help="Print per-step close fidelity, open fidelity, and cost function.",
     )
     parser.add_argument(
         "--print-fidelity-terms",
         action="store_true",
+        default=suppress,
         help="Print and save per-step perturbative fidelity term diagnostics.",
     )
     parser.add_argument(
         "--initial-pulse-npz",
         type=Path,
-        default=None,
+        default=suppress,
         help="Load a custom initial pulse .npz with an amplitudes array.",
     )
     parser.add_argument(
         "--no-progress",
         action="store_true",
+        default=suppress,
         help="Disable the optimization progress bar.",
     )
     parser.add_argument(
         "--close-grape",
         action="store_true",
+        default=suppress,
         help="Run optimization without fluctuation terms.",
     )
     parser.add_argument(
         "--gamma-heating",
         type=float,
-        default=defaults.system.gamma_heating,
-        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†.",
+        default=suppress,
+        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†; implies decoherence enabled.",
     )
     parser.add_argument(
         "--gamma-motional-dephasing",
         type=float,
-        default=defaults.system.gamma_motional_dephasing,
-        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a.",
+        default=suppress,
+        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a; implies decoherence enabled.",
     )
     parser.add_argument(
         "--gamma-spin-dephasing",
         type=float,
-        default=defaults.system.gamma_spin_dephasing,
-        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2.",
+        default=suppress,
+        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2; implies decoherence enabled.",
     )
     args = parser.parse_args(argv)
+    return _apply_cli_overrides(_load_base_config(args.config), args)
+
+
+def _apply_cli_overrides(base, args):
+    def arg(name, fallback):
+        return getattr(args, name, fallback)
+
+    system = base.system
+    gamma_names = ("gamma_heating", "gamma_motional_dephasing", "gamma_spin_dephasing")
+    gamma_updates = {
+        name: float(getattr(args, name)) for name in gamma_names if hasattr(args, name)
+    }
+    if gamma_updates:
+        if system.type != "spin_boson":
+            raise ValueError(
+                "--gamma-* flags apply to the spin_boson system only; "
+                f"config selects system type {system.type!r}."
+            )
+        system = replace(
+            system,
+            noise=replace(
+                system.noise,
+                decoherence=replace(
+                    system.noise.decoherence, enabled=True, **gamma_updates
+                ),
+            ),
+        )
+    if getattr(args, "close_grape", False):
+        system = _with_fluctuations_enabled(system, False)
     return replace(
-        defaults,
-        system=replace(
-            defaults.system,
-            include_fluctuations=not args.close_grape,
-            gamma_heating=args.gamma_heating,
-            gamma_motional_dephasing=args.gamma_motional_dephasing,
-            gamma_spin_dephasing=args.gamma_spin_dephasing,
+        base,
+        system=system,
+        pulse=replace(
+            base.pulse,
+            n_steps=arg("n_steps", base.pulse.n_steps),
         ),
-        pulse=replace(defaults.pulse, n_steps=args.n_steps),
-        optimizer=replace(defaults.optimizer, maxiter=args.maxiter),
+        optimizer=replace(
+            base.optimizer,
+            maxiter=arg("maxiter", base.optimizer.maxiter),
+        ),
         penalty=replace(
-            defaults.penalty,
-            l1_smooth_weight=args.l1_smooth_weight,
-            l2_smooth_weight=args.l2_smooth_weight,
+            base.penalty,
+            l1_smooth_weight=arg("l1_smooth_weight", base.penalty.l1_smooth_weight),
+            l2_smooth_weight=arg("l2_smooth_weight", base.penalty.l2_smooth_weight),
         ),
         runtime=replace(
-            defaults.runtime,
-            workers=args.workers,
-            print_step=args.print_step,
-            print_fidelity_terms=args.print_fidelity_terms,
-            initial_pulse_npz=args.initial_pulse_npz,
-            no_progress=args.no_progress,
+            base.runtime,
+            workers=arg("workers", base.runtime.workers),
+            print_step=arg("print_step", base.runtime.print_step),
+            print_fidelity_terms=arg(
+                "print_fidelity_terms", base.runtime.print_fidelity_terms
+            ),
+            initial_pulse_npz=arg("initial_pulse_npz", base.runtime.initial_pulse_npz),
+            no_progress=arg("no_progress", base.runtime.no_progress),
         ),
     )
 
 
 def parse_evaluate_args(argv=None):
-    defaults = default_experiment_config()
     parser = argparse.ArgumentParser(
         description="Evaluate a spin-boson pulse without running optimization."
     )
     parser.add_argument(
-        "--pulse-npz",
+        "--config",
         type=Path,
         default=None,
+        help="YAML experiment configuration file; explicit flags override it.",
+    )
+    parser.add_argument(
+        "--pulse-npz",
+        type=Path,
+        default=argparse.SUPPRESS,
         help="Pulse .npz to evaluate. If omitted, evaluate the configured initial pulse.",
     )
-    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
+    parser.add_argument("--n-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--workers",
         type=int,
-        default=defaults.runtime.workers,
+        default=argparse.SUPPRESS,
         help="Number of worker processes for open-gate fidelity.",
     )
     args = parser.parse_args(argv)
+    base = _load_base_config(args.config)
     return replace(
-        defaults,
-        pulse=replace(defaults.pulse, n_steps=args.n_steps),
+        base,
+        pulse=replace(
+            base.pulse,
+            n_steps=getattr(args, "n_steps", base.pulse.n_steps),
+        ),
         runtime=replace(
-            defaults.runtime,
-            workers=args.workers,
-            initial_pulse_npz=args.pulse_npz,
+            base.runtime,
+            workers=getattr(args, "workers", base.runtime.workers),
+            initial_pulse_npz=getattr(args, "pulse_npz", base.runtime.initial_pulse_npz),
             no_progress=True,
         ),
     )
@@ -655,7 +616,7 @@ def plot_population_marginals(
 def format_experiment_note(config, result, metrics):
     return "\n".join(
         [
-            "objective=open_gate_fidelity_expansion, target=MS_XX(pi/2)",
+            f"objective=open_gate_fidelity_expansion, target={config.system.params.target_gate}",
             (
                 f"n_steps={config.pulse.n_steps}, maxiter={config.optimizer.maxiter}, "
                 f"workers={config.runtime.workers}"
@@ -698,9 +659,10 @@ def print_experiment_report(config, result, metrics, outputs):
         "Configuration",
         [
             ("objective", "open_gate_fidelity_expansion"),
-            ("target_gate", "MS_XX(pi/2)"),
-            ("n_levels", config.system.n_levels),
-            ("include_fluctuations", config.system.include_fluctuations),
+            ("system_type", config.system.type),
+            ("target_gate", config.system.params.target_gate),
+            ("n_levels", config.system.params.n_levels),
+            ("include_fluctuations", config.system.noise.fluctuations.enabled),
             ("n_steps", config.pulse.n_steps),
             ("maxiter", config.optimizer.maxiter),
             ("workers", config.runtime.workers),
@@ -814,13 +776,14 @@ def write_optimization_preview_report(
             [
                 ("experiment_dir", experiment_dir),
                 ("objective", "open_gate_fidelity_expansion"),
-                ("target_gate", "MS_XX(pi/2)"),
-                ("n_levels", config.system.n_levels),
+                ("system_type", config.system.type),
+                ("target_gate", config.system.params.target_gate),
+                ("n_levels", config.system.params.n_levels),
                 ("n_steps", config.pulse.n_steps),
                 ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
-                ("phi_s", config.system.phi_s),
-                ("eta", config.system.eta),
-                ("include_fluctuations", config.system.include_fluctuations),
+                ("phi_s", config.system.params.phi_s),
+                ("eta", config.system.params.eta),
+                ("include_fluctuations", config.system.noise.fluctuations.enabled),
                 ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
                 ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
                 ("max_order", config.objective.max_order),
@@ -1030,8 +993,8 @@ def print_optimization_preview(report_path, config, initial_metrics, kappa_metri
     print_section(
         "Configuration",
         [
-            ("n_levels", config.system.n_levels),
-            ("include_fluctuations", config.system.include_fluctuations),
+            ("n_levels", config.system.params.n_levels),
+            ("include_fluctuations", config.system.noise.fluctuations.enabled),
             ("n_steps", config.pulse.n_steps),
             ("maxiter", config.optimizer.maxiter),
             ("workers", config.runtime.workers),
@@ -1078,45 +1041,6 @@ def _format_markdown_value(value):
     if value is None:
         return "disabled"
     return value
-
-
-def _customized_initial_pulse(
-    n_steps=200,
-    total_time_us=225.8,
-    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
-    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
-    random_seed=None,
-):
-    if n_steps < 1:
-        raise ValueError("n_steps must be at least 1.")
-    total_time = float(total_time_us) * 1e-6
-    if total_time <= 0.0:
-        raise ValueError("total_time_us must be positive.")
-
-    alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
-    alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
-    dt = total_time / n_steps
-
-    alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
-    alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1_noise = (
-        np.random.randn(n_steps)
-        if random_seed is None
-        else np.random.default_rng(random_seed).standard_normal(n_steps)
-    )
-    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * alpha1_noise
-    alpha1 = np.clip(alpha1, alpha1_lower, alpha1_upper)
-    alpha2 = alpha2_upper * np.ones(n_steps, dtype=float)
-
-    return PiecewiseConstantPulse(
-        amplitudes=np.column_stack([alpha1, alpha2]),
-        dt=dt,
-    )
-def _khz_bounds_to_rad_s(bounds):
-    lower, upper = np.asarray(bounds, dtype=float)
-    if upper <= lower:
-        raise ValueError("upper bounds must be greater than lower bounds.")
-    return 2.0 * np.pi * 1000.0 * lower, 2.0 * np.pi * 1000.0 * upper
 
 
 def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, atol=1e-9):
@@ -1217,62 +1141,40 @@ def perturbative_fidelity_terms(system, pulse, target_gate, n_levels, max_order=
     return summary, pair_rows
 
 
-def build_systems(config):
-    system = spin_boson_control_system(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
-    )
-    if not config.system.include_fluctuations:
-        noisy_system = spin_boson_control_system(
-            n_levels=config.system.n_levels,
-            phi_s=config.system.phi_s,
-            eta=config.system.eta,
-        )
-        return system, noisy_system, []
+def system_definition(config):
+    return get_system(config.system.type)
 
-    noise_specs = spin_boson_noise_term_specs(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
+
+def build_systems(config):
+    return system_definition(config).build_systems(
+        config.system.params, config.system.noise
     )
-    noisy_system = spin_boson_noisy_control_system(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
-    )
-    return system, noisy_system, noise_specs
 
 
 def build_initial_pulse(config):
-    return _customized_initial_pulse(
-        n_steps=config.pulse.n_steps,
-        total_time_us=config.pulse.total_time_us,
-        alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
-        alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
-        random_seed=config.pulse.random_seed,
+    return system_definition(config).build_initial_pulse(
+        config.system.params, config.pulse
     )
 
 
 def build_parameterization(config, pulse):
-    return Alpha2EndpointZeroParameterization(
-        spin_boson_parameterization(
-            pulse.n_steps,
-            alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
-            alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
-        )
+    return system_definition(config).build_parameterization(
+        config.system.params, pulse
     )
 
 
 def build_collapse_operators(config):
-    if not config.system.include_decoherence:
-        return []
-    return spin_boson_collapse_operators(
-        config.system.n_levels,
-        gamma_heating=config.system.gamma_heating,
-        gamma_motional_dephasing=config.system.gamma_motional_dephasing,
-        gamma_spin_dephasing=config.system.gamma_spin_dephasing,
+    return system_definition(config).build_collapse_operators(
+        config.system.params, config.system.noise
     )
+
+
+def build_target_gate(config):
+    return system_definition(config).target_gate(config.system.params)
+
+
+def build_state_pairs(config):
+    return system_definition(config).state_pairs(config.system.params)
 
 
 def build_decoherence_correction_problem(
@@ -1358,7 +1260,7 @@ def run_perturbative_experiment(
     print_report=True,
 ):
     config = _coerce_experiment_config(config)
-    n_levels = config.system.n_levels
+    n_levels = config.system.params.n_levels
     system, noisy_system, noise_specs = build_systems(config)
     initial_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, initial_pulse)
@@ -1371,8 +1273,8 @@ def run_perturbative_experiment(
         )
         for warning in custom_initial_metadata["warnings"]:
             print(warning, file=sys.stderr, flush=True)
-    target_gate = ms_xx_pi_over_2_gate()
-    state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+    target_gate = build_target_gate(config)
+    state_pairs = build_state_pairs(config)
     collapse_operators = build_collapse_operators(config)
     optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
@@ -1409,6 +1311,7 @@ def run_perturbative_experiment(
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
+    config_snapshot_path = write_config_snapshot(config, experiment_dir / "config.yaml")
 
     optimizer_options = config.optimizer.options
     optimizer = build_optimizer(config)
@@ -1736,6 +1639,7 @@ def run_perturbative_experiment(
                 raise RuntimeError(f"Expected non-empty fidelity diagnostics at {path}.")
 
     outputs = {
+        "config_snapshot": config_snapshot_path,
         "pulse_plot": pulse_path,
         "propagation_plot": propagation_path,
         "step_log": step_log_path,
@@ -1829,11 +1733,11 @@ def write_evaluation_report(
             [
                 ("experiment_dir", experiment_dir),
                 ("pulse_source", pulse_source),
-                ("n_levels", config.system.n_levels),
+                ("n_levels", config.system.params.n_levels),
                 ("n_steps", config.pulse.n_steps),
-                ("phi_s", config.system.phi_s),
-                ("eta", config.system.eta),
-                ("include_fluctuations", config.system.include_fluctuations),
+                ("phi_s", config.system.params.phi_s),
+                ("eta", config.system.params.eta),
+                ("include_fluctuations", config.system.noise.fluctuations.enabled),
                 ("workers", config.runtime.workers),
                 *custom_initial_configuration(custom_initial_metadata),
             ],
@@ -1858,7 +1762,7 @@ def write_evaluation_report(
 
 def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True):
     config = _coerce_experiment_config(config)
-    n_levels = config.system.n_levels
+    n_levels = config.system.params.n_levels
     system, noisy_system, _noise_specs = build_systems(config)
     reference_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, reference_pulse)
@@ -1887,7 +1791,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         dt=reference_pulse.dt,
     )
 
-    target_gate = ms_xx_pi_over_2_gate()
+    target_gate = build_target_gate(config)
     close_fidelity = closed_gate_fidelity(system, evaluated_pulse, target_gate, n_levels)
     open_fidelity = open_gate_fidelity(
         noisy_system,
@@ -1917,6 +1821,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
+    config_snapshot_path = write_config_snapshot(config, experiment_dir / "config.yaml")
     pulse_stem = experiment_dir / "evaluated_pulse"
     pulse_npz_path, pulse_csv_path = export_pulse_controls(
         evaluated_pulse,
@@ -1942,7 +1847,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     }
     collapse_operators = build_collapse_operators(config)
     if collapse_operators:
-        state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+        state_pairs = build_state_pairs(config)
         correction_problem = build_decoherence_correction_problem(
             config,
             noisy_system,
@@ -1957,6 +1862,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         finally:
             correction_problem.shutdown()
     outputs = {
+        "config_snapshot": config_snapshot_path,
         "evaluated_pulse_npz": pulse_npz_path,
         "evaluated_pulse_csv": pulse_csv_path,
         "propagation_plot": propagation_path,

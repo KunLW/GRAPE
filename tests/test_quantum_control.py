@@ -1999,3 +1999,172 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
     assert np.isfinite(value)
     assert gradient.shape == pulse.amplitudes.shape
     assert np.all(np.isfinite(gradient))
+
+
+# --- YAML experiment configuration (experiments_improved) ---
+
+
+from dataclasses import replace as _dc_replace
+
+import pytest as _pytest
+
+from experiments_improved.config_io import (
+    config_to_yaml_str,
+    load_experiment_config,
+    write_config_snapshot,
+)
+from experiments_improved.systems import get_system
+from experiments_improved import spin_boson_open as sbo
+
+
+def _yaml_config_file(tmp_path, text):
+    path = tmp_path / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_yaml_config_round_trip(tmp_path):
+    config = sbo.default_experiment_config()
+    config = _dc_replace(
+        config,
+        system=_dc_replace(
+            config.system,
+            params=_dc_replace(
+                config.system.params,
+                phi_s=0.25,
+                mode_vector=(0.5, 0.5),
+                alpha1_noise_fraction=0.0,
+            ),
+            noise=_dc_replace(
+                config.system.noise,
+                decoherence=_dc_replace(
+                    config.system.noise.decoherence,
+                    enabled=True,
+                    gamma_heating=12.5,
+                ),
+            ),
+        ),
+        pulse=_dc_replace(config.pulse, n_steps=17, random_seed=42),
+        runtime=_dc_replace(config.runtime, initial_pulse_npz=tmp_path / "p.npz"),
+    )
+    path = write_config_snapshot(config, tmp_path / "config.yaml")
+    reloaded = load_experiment_config(path, sbo.default_experiment_config(), get_system)
+    assert reloaded == config
+
+
+def test_yaml_config_cli_precedence(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "optimizer:\n  maxiter: 7\nruntime:\n  workers: 3\n",
+    )
+    config = sbo.parse_args(["--config", str(path), "--maxiter", "3"])
+    assert config.optimizer.maxiter == 3
+    assert config.runtime.workers == 3
+    assert config.pulse.n_steps == sbo.default_experiment_config().pulse.n_steps
+
+
+def test_yaml_config_physics_knobs_reach_system(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 3",
+                "    mode_vector: [0.5, 0.5]",
+                "    alpha1_noise_fraction: 0.0",
+                "  noise:",
+                "    fluctuations:",
+                "      sigma_static_motional_frequency: 42.0",
+                "pulse:",
+                "  n_steps: 9",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    _system, _noisy, specs = sbo.build_systems(config)
+    by_name = {spec["name"]: spec for spec in specs}
+    assert by_name["static[1]"]["coefficient"] == 42.0
+    assert "mode=(0.5, 0.5)" in by_name["control[1]"]["definition"]
+    pulse_a = sbo.build_initial_pulse(config)
+    pulse_b = sbo.build_initial_pulse(config)
+    np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
+
+
+def test_yaml_config_enabled_flags(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  noise:",
+                "    decoherence:",
+                "      enabled: false",
+                "      gamma_heating: 50.0",
+                "    fluctuations:",
+                "      enabled: false",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    assert sbo.build_collapse_operators(config) == []
+    _system, noisy_system, specs = sbo.build_systems(config)
+    assert specs == []
+    assert len(noisy_system.static_fluctuations) == 0
+
+    cli_config = sbo.parse_args(["--gamma-heating", "50.0"])
+    assert cli_config.system.noise.decoherence.enabled
+    assert len(sbo.build_collapse_operators(cli_config)) == 1
+
+
+def test_yaml_config_unknown_keys_raise(tmp_path):
+    path = _yaml_config_file(tmp_path, "system:\n  params:\n    gamma_heat: 1.0\n")
+    with _pytest.raises(ValueError, match="gamma_heat"):
+        sbo.parse_args(["--config", str(path)])
+
+    path = _yaml_config_file(tmp_path, "system:\n  type: nv_center\n")
+    with _pytest.raises(ValueError, match="spin_boson"):
+        sbo.parse_args(["--config", str(path)])
+
+    path = _yaml_config_file(tmp_path, "system:\n  params:\n    target_gate: bogus_gate\n")
+    config = sbo.parse_args(["--config", str(path)])
+    with _pytest.raises(ValueError, match="ms_xx_pi_over_2"):
+        sbo.build_target_gate(config)
+
+
+def test_close_grape_flag_and_legacy_namespace_coerce():
+    config = sbo.parse_args(["--close-grape"])
+    assert not config.system.noise.fluctuations.enabled
+
+    legacy = SimpleNamespace(include_fluctuations=False, maxiter=2, n_steps=7)
+    coerced = sbo._coerce_experiment_config(legacy)
+    assert not coerced.system.noise.fluctuations.enabled
+    assert coerced.optimizer.maxiter == 2
+    assert coerced.pulse.n_steps == 7
+
+
+def test_experiment_writes_reloadable_config_snapshot(tmp_path):
+    config = sbo.default_experiment_config()
+    config = _dc_replace(
+        config,
+        system=_dc_replace(
+            config.system,
+            params=_dc_replace(config.system.params, n_levels=3),
+        ),
+        pulse=_dc_replace(config.pulse, n_steps=5, random_seed=7),
+        optimizer=_dc_replace(config.optimizer, maxiter=1),
+        runtime=_dc_replace(config.runtime, no_progress=True),
+    )
+    outcome = sbo.run_perturbative_experiment(
+        config,
+        output_root=tmp_path,
+        print_report=False,
+    )
+    snapshot = outcome["outputs"]["config_snapshot"]
+    assert snapshot.exists()
+    reloaded = load_experiment_config(
+        snapshot, sbo.default_experiment_config(), get_system
+    )
+    assert reloaded == config
