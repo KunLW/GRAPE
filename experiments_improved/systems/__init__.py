@@ -12,7 +12,16 @@ objects from them. A system definition is any object providing:
 - ``build_collapse_operators(params, noise)`` -> list of jump operators
 - ``build_initial_pulse(params, pulse_config)`` -> ``PiecewiseConstantPulse``
 - ``build_parameterization(params, pulse)`` -> pulse parameterization
-- ``state_pairs(params)`` -> weighted ``StatePair`` tuple for the gate average
+- ``target_gate(params)`` / ``state_pairs(params)`` -> target unitary and the
+  weighted ``StatePair`` tuple for the gate average
+- presentation hooks ``control_channels`` / ``population_structure`` /
+  ``probe_state_pair`` (optional; the driver skips what is absent)
+
+In practice, subclass ``SystemDefinitionBase`` from ``systems/common.py``,
+which implements everything generic from a handful of physics hooks.
+
+Invariant: the driver and quantum_control core never import concrete system
+modules; all system specifics flow through this registry.
 
 See ``systems/README.md`` for a walkthrough of adding a new system
 (e.g. an NV center or a Rydberg array) and ``systems/spin_boson.py`` for the
