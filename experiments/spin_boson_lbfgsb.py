@@ -39,6 +39,7 @@ from quantum_control import (
     annihilation_operator,
     closed_gate_fidelity,
     creation_operator,
+    motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     number_operator,
     open_gate_fidelity,
@@ -296,8 +297,8 @@ def main():
         l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
         step_log.append(
             step=step,
-            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, N_LEVELS),
-            open_fidelity=open_gate_fidelity(noisy_system, pulse, target_gate, N_LEVELS),
+            close_fidelity=closed_gate_fidelity(system, pulse, motion_resolved_gate_state_pairs(target_gate, N_LEVELS)),
+            open_fidelity=open_gate_fidelity(noisy_system, pulse, motion_resolved_gate_state_pairs(target_gate, N_LEVELS)),
             cost_function=penalized_problem.value(parameters),
             raw_fidelity=penalized_problem.raw_value(parameters),
             l1_penalty=l1_penalty,
@@ -335,26 +336,22 @@ def main():
     initial_close_gate_fidelity = closed_gate_fidelity(
         system,
         masked_initial_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
     final_close_gate_fidelity = closed_gate_fidelity(
         system,
         final_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
     initial_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         masked_initial_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
     final_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         final_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
 
     lower, upper = parameterization.base._bounds_for(final_pulse.amplitudes.shape)

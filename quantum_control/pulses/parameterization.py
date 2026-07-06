@@ -12,29 +12,34 @@ class BoundedAmplitudeParameterization:
 
     def to_physical(self, normalized):
         normalized = np.asarray(normalized, dtype=float)
-        lower, upper = self._bounds_for(normalized.shape)
+        lower, upper = self.bounds_for(normalized.shape)
         return self.center(lower, upper) + self.scale(lower, upper) * normalized
 
     def to_parameters(self, amplitudes):
         amplitudes = np.asarray(amplitudes, dtype=float)
-        lower, upper = self._bounds_for(amplitudes.shape)
+        lower, upper = self.bounds_for(amplitudes.shape)
         return (amplitudes - self.center(lower, upper)) / self.scale(lower, upper)
 
     def pullback_gradient(self, physical_gradient):
         physical_gradient = np.asarray(physical_gradient, dtype=float)
-        lower, upper = self._bounds_for(physical_gradient.shape)
+        lower, upper = self.bounds_for(physical_gradient.shape)
         return physical_gradient * self.scale(lower, upper)
 
     def parameter_bounds(self, shape):
         size = int(np.prod(shape))
         return [(-1.0, 1.0)] * size
 
-    def _bounds_for(self, shape):
+    def bounds_for(self, shape):
+        """Broadcast the physical ``(lower, upper)`` bounds to ``shape``."""
         lower = np.broadcast_to(np.asarray(self.lower, dtype=float), shape)
         upper = np.broadcast_to(np.asarray(self.upper, dtype=float), shape)
         if np.any(upper <= lower):
             raise ValueError("upper bounds must be greater than lower bounds.")
         return lower, upper
+
+    # Deprecated alias: external wrappers and legacy experiments/ scripts
+    # still call the pre-publication underscore name.
+    _bounds_for = bounds_for
 
     @staticmethod
     def center(lower, upper):
@@ -102,7 +107,7 @@ class MaskedPulseParameterization:
         return self.base.parameter_bounds(self.parameter_shape)
 
     def _free_bounds(self):
-        lower, upper = self.base._bounds_for(self.pulse_shape)
+        lower, upper = self.base.bounds_for(self.pulse_shape)
         return lower[self.free_mask], upper[self.free_mask]
 
 

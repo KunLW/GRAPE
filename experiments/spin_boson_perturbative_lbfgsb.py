@@ -1139,15 +1139,14 @@ def run_perturbative_experiment(
         ("initial_raw_fidelity", penalized_problem.raw_value(initial_parameters)),
         (
             "initial_close_gate_fidelity",
-            closed_gate_fidelity(system, masked_initial_pulse, target_gate, N_LEVELS),
+            closed_gate_fidelity(system, masked_initial_pulse, motion_resolved_gate_state_pairs(target_gate, N_LEVELS)),
         ),
         (
             "initial_open_gate_fidelity",
             open_gate_fidelity(
                 noisy_system,
                 masked_initial_pulse,
-                target_gate,
-                N_LEVELS,
+                motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
                 n_workers=args.workers,
             ),
         ),
@@ -1200,12 +1199,11 @@ def run_perturbative_experiment(
         l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
         step_log.append(
             step=step,
-            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, N_LEVELS),
+            close_fidelity=closed_gate_fidelity(system, pulse, motion_resolved_gate_state_pairs(target_gate, N_LEVELS)),
             open_fidelity=open_gate_fidelity(
                 noisy_system,
                 pulse,
-                target_gate,
-                N_LEVELS,
+                motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
                 n_workers=args.workers,
             ),
             cost_function=penalized_problem.value(parameters),
@@ -1305,27 +1303,23 @@ def run_perturbative_experiment(
     initial_close_gate_fidelity = closed_gate_fidelity(
         system,
         masked_initial_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
     final_close_gate_fidelity = closed_gate_fidelity(
         system,
         final_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
     initial_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         masked_initial_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
         n_workers=args.workers,
     )
     final_open_gate_fidelity = open_gate_fidelity(
         noisy_system,
         final_pulse,
-        target_gate,
-        N_LEVELS,
+        motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
         n_workers=args.workers,
     )
 

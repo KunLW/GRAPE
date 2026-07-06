@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 
+from quantum_control.gate_metrics import two_qubit_logical_test_states
 from quantum_control.pulses.parameterization import BoundedAmplitudeParameterization
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
+from quantum_control.state_average import StatePair
 from quantum_control.systems.closed_system import FluctuatingClosedSystem
 from quantum_control.systems.open_system import LindbladOpenSystem
+from quantum_control.units import khz_bounds_to_rad_s
 
 DEFAULT_LAMB_DICKE_ETA = 0.075
 DEFAULT_ALPHA1_KHZ_BOUNDS = (1.0, 60.0)
@@ -50,6 +53,38 @@ def two_qubit_spin_phase_mode(phi_s, mode_vector):
 
 def two_qubit_spin_phase_difference(phi_s):
     return two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
+
+
+def motion_resolved_gate_state_pairs(target_gate, n_levels):
+    """Expand a 4x4 spin gate into weighted spin ⊗ motion ``StatePair``s.
+
+    Initial states are the 16 two-qubit logical test states with the motion
+    in its ground state; targets are resolved over all ``n_levels`` motional
+    levels, so the average measures the gate fidelity on the spins while
+    tracking where motional population ends up.
+    """
+    if n_levels < 1:
+        raise ValueError("n_levels must be at least 1.")
+    target_gate = np.asarray(target_gate, dtype=complex)
+    if target_gate.shape != (4, 4):
+        raise ValueError("target_gate must have shape (4, 4).")
+
+    motion_ground = _motion_basis(0, n_levels)
+    weight = 1.0 / len(two_qubit_logical_test_states())
+    pairs = []
+    for spin_state in two_qubit_logical_test_states():
+        initial_state = np.kron(spin_state, motion_ground)
+        target_spin = target_gate @ spin_state
+        for motion_index in range(n_levels):
+            target_state = np.kron(target_spin, _motion_basis(motion_index, n_levels))
+            pairs.append(StatePair(initial_state, target_state, weight))
+    return tuple(pairs)
+
+
+def _motion_basis(index, n_levels):
+    state = np.zeros(n_levels, dtype=complex)
+    state[index] = 1.0
+    return state
 
 
 def spin_boson_collapse_operators(
@@ -152,8 +187,8 @@ def spin_boson_initial_pulse(
     if alpha1_cycles <= 0.0:
         raise ValueError("alpha1_cycles must be positive.")
 
-    alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
-    alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
+    alpha1_lower, alpha1_upper = khz_bounds_to_rad_s(alpha1_khz_bounds)
+    alpha2_lower, alpha2_upper = khz_bounds_to_rad_s(alpha2_khz_bounds)
     dt = total_time / n_steps
     normalized_time = (np.arange(n_steps, dtype=float) + 0.5) / n_steps
 
@@ -179,16 +214,10 @@ def spin_boson_parameterization(
 ):
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1.")
-    alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
-    alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
+    alpha1_lower, alpha1_upper = khz_bounds_to_rad_s(alpha1_khz_bounds)
+    alpha2_lower, alpha2_upper = khz_bounds_to_rad_s(alpha2_khz_bounds)
     return BoundedAmplitudeParameterization(
         lower=np.array([alpha1_lower, alpha2_lower], dtype=float),
         upper=np.array([alpha1_upper, alpha2_upper], dtype=float),
     )
 
-
-def _khz_bounds_to_rad_s(bounds):
-    lower, upper = np.asarray(bounds, dtype=float)
-    if upper <= lower:
-        raise ValueError("upper bounds must be greater than lower bounds.")
-    return 2.0 * np.pi * 1000.0 * lower, 2.0 * np.pi * 1000.0 * upper

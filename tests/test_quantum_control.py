@@ -1009,8 +1009,9 @@ def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
     )
     target_gate = ms_xx_pi_over_2_gate()
 
-    closed = closed_gate_fidelity(system, pulse, target_gate, n_levels)
-    opened = open_gate_fidelity(system, pulse, target_gate, n_levels)
+    state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+    closed = closed_gate_fidelity(system, pulse, state_pairs)
+    opened = open_gate_fidelity(system, pulse, state_pairs)
 
     assert np.allclose(opened, closed)
 

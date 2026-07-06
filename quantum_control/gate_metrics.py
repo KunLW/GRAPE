@@ -7,7 +7,7 @@ from quantum_control.evolution.expansion_evolution import PerturbativeExpansionE
 from quantum_control.evolution.nominal_evolution import NominalUnitaryEvolution
 from quantum_control.objectives.expansion_fidelity import ExpansionFidelity
 from quantum_control.objectives.state_fidelity import StateTransferFidelity
-from quantum_control.state_average import ExpansionStateAverageFidelity, StatePair
+from quantum_control.state_average import ExpansionStateAverageFidelity
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
 
@@ -31,29 +31,16 @@ def ms_xx_pi_over_2_gate():
     return (np.eye(4, dtype=complex) - 1j * xx) / np.sqrt(2.0)
 
 
-def motion_resolved_gate_state_pairs(target_gate, n_levels):
-    if n_levels < 1:
-        raise ValueError("n_levels must be at least 1.")
-    target_gate = np.asarray(target_gate, dtype=complex)
-    if target_gate.shape != (4, 4):
-        raise ValueError("target_gate must have shape (4, 4).")
+def closed_gate_fidelity(system, pulse, state_pairs):
+    """Average closed-system transfer fidelity over weighted ``state_pairs``.
 
-    motion_ground = _motion_basis(0, n_levels)
-    weight = 1.0 / len(two_qubit_logical_test_states())
-    pairs = []
-    for spin_state in two_qubit_logical_test_states():
-        initial_state = np.kron(spin_state, motion_ground)
-        target_spin = target_gate @ spin_state
-        for motion_index in range(n_levels):
-            target_state = np.kron(target_spin, _motion_basis(motion_index, n_levels))
-            pairs.append(StatePair(initial_state, target_state, weight))
-    return tuple(pairs)
-
-
-def closed_gate_fidelity(system, pulse, target_gate, n_levels):
+    ``state_pairs`` is any iterable of ``StatePair`` (e.g. from a system
+    definition's ``state_pairs()``); this function is agnostic to the
+    physical structure behind them.
+    """
     evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
     objective_values = []
-    for pair in motion_resolved_gate_state_pairs(target_gate, n_levels):
+    for pair in state_pairs:
         context = EvolutionContext(
             initial_state=pair.initial_state,
             target_state=pair.target_state,
@@ -65,7 +52,8 @@ def closed_gate_fidelity(system, pulse, target_gate, n_levels):
     return float(np.sum(objective_values))
 
 
-def open_gate_fidelity(system, pulse, target_gate, n_levels, n_workers=1):
+def open_gate_fidelity(system, pulse, state_pairs, n_workers=1):
+    """Second-order expansion fidelity averaged over weighted ``state_pairs``."""
     step_builder = PerturbativeStepBuilder()
     objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
     averaged = ExpansionStateAverageFidelity(
@@ -74,7 +62,7 @@ def open_gate_fidelity(system, pulse, target_gate, n_levels, n_workers=1):
         evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
         objective=objective,
         differentiator=None,
-        state_pairs=motion_resolved_gate_state_pairs(target_gate, n_levels),
+        state_pairs=tuple(state_pairs),
         normalize_weights=False,
         n_workers=n_workers,
     )
@@ -82,9 +70,3 @@ def open_gate_fidelity(system, pulse, target_gate, n_levels, n_workers=1):
         return averaged.value()
     finally:
         averaged.shutdown()
-
-
-def _motion_basis(index, n_levels):
-    state = np.zeros(n_levels, dtype=complex)
-    state[index] = 1.0
-    return state

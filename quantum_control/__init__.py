@@ -1,7 +1,6 @@
 from quantum_control.context import EvolutionContext
 from quantum_control.gate_metrics import (
     closed_gate_fidelity,
-    motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     open_gate_fidelity,
     single_qubit_logical_test_states,
@@ -31,6 +30,7 @@ from quantum_control.systems.spin_boson import (
     DEFAULT_LAMB_DICKE_ETA,
     annihilation_operator,
     creation_operator,
+    motion_resolved_gate_state_pairs,
     number_operator,
     spin_boson_collapse_operators,
     spin_boson_control_system,
@@ -40,6 +40,7 @@ from quantum_control.systems.spin_boson import (
     two_qubit_spin_phase_mode,
     two_qubit_spin_phase_difference,
 )
+from quantum_control.units import RAD_S_PER_KHZ, khz_bounds_to_rad_s
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
 from quantum_control.evolution.nominal_evolution import NominalUnitaryEvolution
@@ -96,6 +97,7 @@ __all__ = [
     "PerturbativeStepBuilder",
     "PiecewiseConstantPulse",
     "PulseConstraints",
+    "RAD_S_PER_KHZ",
     "SecondOrderFluctuationFidelity",
     "StateTransferFidelity",
     "StatePair",
@@ -105,6 +107,7 @@ __all__ = [
     "evaluate_error_budget",
     "closed_gate_fidelity",
     "endpoint_masked_parameterization",
+    "khz_bounds_to_rad_s",
     "load_pulse_npz",
     "motion_resolved_gate_state_pairs",
     "ms_xx_pi_over_2_gate",
