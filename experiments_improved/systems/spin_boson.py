@@ -1,9 +1,11 @@
 """Spin-boson (trapped-ion MS gate) system definition for the experiment driver.
 
 Reference implementation of the system-definition interface documented in
-``systems/__init__.py``. The ``SpinBosonParams`` / ``SpinBosonNoise``
-dataclasses define the ``system.params`` / ``system.noise`` YAML schema; the
-builder methods produce the quantum_control objects the driver consumes.
+``systems/__init__.py``: the physics hooks of ``SystemDefinitionBase`` (see
+``systems/common.py``) are filled in here, while the generic plumbing —
+noise-spec bookkeeping, decoherence gating, presentation defaults — lives in
+the base class. The ``SpinBosonParams`` / ``SpinBosonNoise`` dataclasses
+define the ``system.params`` / ``system.noise`` YAML schema.
 
 Physical model
 --------------
@@ -44,8 +46,10 @@ from quantum_control import (
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
+    RAD_S_PER_KHZ,
     annihilation_operator,
     creation_operator,
+    khz_bounds_to_rad_s,
     motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     number_operator,
@@ -55,6 +59,17 @@ from quantum_control import (
     two_qubit_spin_phase_mode,
 )
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
+
+from experiments_improved.systems.common import (
+    ControlChannel,
+    DecoherenceConfigBase,
+    NoiseTerm,
+    PopulationStructure,
+    StateProbe,
+    SystemDefinitionBase,
+    basis_state,
+    validate_pulse_config,
+)
 
 # Registry of target gates selectable via ``system.params.target_gate``.
 # Values are zero-argument builders returning the unitary as an array-like;
@@ -84,6 +99,19 @@ def resolve_target_gate(name):
     if deviation > 1e-10:
         raise ValueError(f"target_gate {name!r} is not unitary (deviation {deviation:.3g}).")
     return gate
+
+
+def ms_bell_target_motion_ground(n_levels):
+    """Bell state ``(|00> - i|11>)/sqrt(2)`` with the motion in its ground state.
+
+    This is where MS_XX(pi/2) sends ``|00>|n=0>``; used as the driver's
+    single-state fidelity probe.
+    """
+    dimension = 4 * n_levels
+    target = np.zeros(dimension, dtype=complex)
+    target[0] = 1.0 / np.sqrt(2.0)
+    target[3 * n_levels] = -1j / np.sqrt(2.0)
+    return target
 
 
 @dataclass(frozen=True)
@@ -123,37 +151,23 @@ class SpinBosonParams:
 
 
 @dataclass(frozen=True)
-class SpinBosonDecoherence:
+class SpinBosonDecoherence(DecoherenceConfigBase):
     """Lindblad decoherence rates (``system.noise.decoherence`` YAML schema).
 
-    All rates are in 1/s and feed ``spin_boson_collapse_operators``.
+    All rates are in 1/s and feed ``spin_boson_collapse_operators``; the
+    ``enabled`` switch and ``any_rate_positive`` gating come from
+    ``DecoherenceConfigBase``.
 
     Attributes:
-        enabled: Master switch; when false the rates are ignored entirely.
         gamma_heating: Motional heating rate (creation-operator jump).
         gamma_motional_dephasing: Motional dephasing rate (number-operator
             jump).
         gamma_spin_dephasing: Collective spin dephasing rate.
     """
 
-    enabled: bool = False
     gamma_heating: float = 0.0
     gamma_motional_dephasing: float = 0.0
     gamma_spin_dephasing: float = 0.0
-
-    @property
-    def any_rate_positive(self):
-        """True if at least one rate is positive.
-
-        Lets the driver skip building collapse operators when decoherence is
-        nominally enabled but all rates are zero, so the more expensive
-        corrected propagation only runs when it changes the result.
-        """
-        return (
-            self.gamma_heating > 0.0
-            or self.gamma_motional_dephasing > 0.0
-            or self.gamma_spin_dephasing > 0.0
-        )
 
 
 @dataclass(frozen=True)
@@ -161,8 +175,8 @@ class SpinBosonFluctuations:
     """Coherent fluctuation strengths (``system.noise.fluctuations`` schema).
 
     Each sigma is the standard deviation of a quasi-static (constant over one
-    gate) error term; see ``spin_boson_noise_term_specs`` for the operator
-    each one multiplies.
+    gate) error term; see ``SpinBosonDefinition.noise_terms`` for the
+    operator each one multiplies.
 
     Attributes:
         enabled: When false, ``build_systems`` returns the ideal system for
@@ -191,103 +205,6 @@ class SpinBosonNoise:
     fluctuations: SpinBosonFluctuations = field(default_factory=SpinBosonFluctuations)
 
 
-def spin_boson_noise_term_specs(params, fluctuations):
-    """Build the four coherent fluctuation terms as self-describing specs.
-
-    Returns a list of dicts (see ``_noise_term_spec`` for the keys), one per
-    error channel:
-
-    - ``spin-shift`` (static): collective spin dephasing,
-      ``kron(0.5 * (sz x I + I x sz), I_motion)`` — a shot-to-shot qubit
-      frequency offset common to both ions.
-    - ``motion-shift`` (static): motional-frequency drift,
-      ``kron(I_spin, n)``.
-    - ``alpha1-rel`` (control): relative amplitude noise on ``alpha1``; same
-      operator as the ``alpha1`` control term, scaled by ``alpha1(t)`` at
-      propagation time.
-    - ``alpha2-rel`` (control): relative amplitude noise on ``alpha2``; same
-      operator as the ``alpha2`` drive term ``eta * kron(S_phi, X1)``.
-
-    Static terms are added to the Hamiltonian as-is; control terms are
-    multiplied by the instantaneous control amplitude, which is what makes
-    their sigmas *relative* errors. The ``definition``/``usage`` strings are
-    carried through to the optimization report so it can document exactly
-    what noise model was applied.
-    """
-    n_levels = params.n_levels
-    spin_identity = np.eye(4, dtype=complex)
-    motion_identity = np.eye(n_levels, dtype=complex)
-    single_identity = np.eye(2, dtype=complex)
-    sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
-    sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
-    number = number_operator(n_levels)
-    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
-    s_phi = two_qubit_spin_phase_mode(params.phi_s, params.mode_vector)
-
-    # The control-kind operators must match the corresponding control
-    # Hamiltonian terms exactly (same operator, same eta/mode conventions):
-    # the propagator applies them as amplitude * sigma * operator, so any
-    # mismatch would silently change the meaning of the relative sigmas.
-    return [
-        _noise_term_spec(
-            kind="static",
-            name="spin-shift",
-            coefficient=fluctuations.sigma_static_spin_dephasing,
-            operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
-            definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="static",
-            name="motion-shift",
-            coefficient=fluctuations.sigma_static_motional_frequency,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="alpha1-rel",
-            coefficient=fluctuations.sigma_control_alpha1_relative,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="alpha1(t) * control[0]",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="alpha2-rel",
-            coefficient=fluctuations.sigma_control_alpha2_relative,
-            operator=params.eta * np.kron(s_phi, x1),
-            definition=(
-                f"eta * kron(S_phi(mode={tuple(params.mode_vector)}), X1), "
-                f"X1=(a + adag)/2, eta={params.eta:.12g}"
-            ),
-            usage="alpha2(t) * control[1]",
-        ),
-    ]
-
-
-def _noise_term_spec(kind, name, coefficient, operator, definition, usage):
-    """Normalize one noise term into the spec dict consumed by the driver.
-
-    ``matrix`` is the pre-multiplied ``coefficient * operator`` actually
-    handed to ``spin_boson_control_system``; ``operator`` and ``coefficient``
-    are kept separately (with the human-readable ``definition``/``usage``)
-    for reporting.
-    """
-    coefficient = float(coefficient)
-    operator = np.asarray(operator, dtype=complex)
-    return {
-        "kind": kind,
-        "name": name,
-        "coefficient": coefficient,
-        "operator": operator,
-        "definition": definition,
-        "usage": usage,
-        "matrix": coefficient * operator,
-    }
-
-
 class Alpha2EndpointZeroParameterization:
     """Parameterization wrapper pinning ``alpha2`` to zero at both endpoints.
 
@@ -301,9 +218,7 @@ class Alpha2EndpointZeroParameterization:
 
     ``base`` is the affine normalized-parameter map returned by
     ``spin_boson_parameterization`` (normalized value ``p`` in ``[-1, 1]``
-    maps to ``center + p * half_width`` per bound pair). Note this wrapper
-    reaches into ``base._bounds_for`` to recover the physical bounds arrays,
-    so it is coupled to that implementation.
+    maps to ``center + p * half_width`` per bound pair).
     """
 
     def __init__(self, base):
@@ -325,7 +240,7 @@ class Alpha2EndpointZeroParameterization:
         so round-tripping always lands on the constraint.
         """
         parameters = self.base.to_parameters(amplitudes)
-        lower, upper = self.base._bounds_for(amplitudes.shape)
+        lower, upper = self.base.bounds_for(amplitudes.shape)
         parameters[[0, -1], 1] = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
         return parameters
 
@@ -348,11 +263,15 @@ class Alpha2EndpointZeroParameterization:
         ``np.ravel_multi_index``) parameter order.
         """
         bounds = self.base.parameter_bounds(shape)
-        lower, upper = self.base._bounds_for(shape)
+        lower, upper = self.base.bounds_for(shape)
         endpoint_value = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
         for row, value in zip((0, shape[0] - 1), endpoint_value):
             bounds[np.ravel_multi_index((row, 1), shape)] = (float(value), float(value))
         return bounds
+
+    def bounds_for(self, shape):
+        """Physical amplitude bounds, broadcast to ``shape`` (delegates)."""
+        return self.base.bounds_for(shape)
 
     @staticmethod
     def _normalized_zero(lower, upper):
@@ -360,20 +279,13 @@ class Alpha2EndpointZeroParameterization:
         return (0.0 - 0.5 * (upper + lower)) / (0.5 * (upper - lower))
 
 
-def _khz_bounds_to_rad_s(bounds):
-    """Convert a ``(lower, upper)`` kHz bound pair to rad/s, validating order."""
-    lower, upper = np.asarray(bounds, dtype=float)
-    if upper <= lower:
-        raise ValueError("upper bounds must be greater than lower bounds.")
-    return 2.0 * np.pi * 1000.0 * lower, 2.0 * np.pi * 1000.0 * upper
-
-
-class SpinBosonDefinition:
+class SpinBosonDefinition(SystemDefinitionBase):
     """System definition registered under ``system.type: spin_boson``.
 
-    Implements the driver interface documented in ``systems/__init__.py``;
-    each ``build_*`` method receives the (possibly YAML-overridden) dataclass
-    instances from ``default_params()`` / ``default_noise()``.
+    Supplies the physics hooks of ``SystemDefinitionBase``; the generic
+    ``build_systems`` / ``build_collapse_operators`` come from the base
+    class, while the initial pulse and parameterization are overridden for
+    the spin-boson-specific start shape and endpoint constraint.
     """
 
     name = "spin_boson"
@@ -384,53 +296,93 @@ class SpinBosonDefinition:
     def default_noise(self):
         return SpinBosonNoise()
 
-    def build_systems(self, params, noise):
-        """Return ``(system, noisy_system, noise_specs)``.
-
-        ``system`` is the ideal control system used for the nominal fidelity;
-        ``noisy_system`` additionally carries the static/control fluctuation
-        matrices for the robustness terms. With fluctuations disabled the
-        same ideal system is returned in both slots and ``noise_specs`` is
-        empty.
-        """
-        system = spin_boson_control_system(
+    def build_nominal_system(self, params, static_fluctuations=(), control_fluctuations=()):
+        return spin_boson_control_system(
             n_levels=params.n_levels,
             phi_s=params.phi_s,
             mode_vector=params.mode_vector,
             eta=params.eta,
+            static_fluctuations=static_fluctuations,
+            control_fluctuations=control_fluctuations,
         )
-        if not noise.fluctuations.enabled:
-            return system, system, []
 
-        noise_specs = spin_boson_noise_term_specs(params, noise.fluctuations)
-        noisy_system = spin_boson_control_system(
-            n_levels=params.n_levels,
-            phi_s=params.phi_s,
-            mode_vector=params.mode_vector,
-            eta=params.eta,
-            static_fluctuations=[
-                spec["matrix"] for spec in noise_specs if spec["kind"] == "static"
-            ],
-            control_fluctuations=[
-                spec["matrix"] for spec in noise_specs if spec["kind"] == "control"
-            ],
-        )
-        return system, noisy_system, noise_specs
+    def noise_terms(self, params, fluctuations):
+        """The four coherent fluctuation terms.
 
-    def build_collapse_operators(self, params, noise):
-        """Return Lindblad jump operators for the decoherence correction.
-
-        Empty when decoherence is disabled or all rates are zero, which the
-        driver takes as "no decoherence correction".
+        - ``spin-shift`` (static): collective spin dephasing,
+          ``kron(0.5 * (sz x I + I x sz), I_motion)`` — a shot-to-shot qubit
+          frequency offset common to both ions.
+        - ``motion-shift`` (static): motional-frequency drift,
+          ``kron(I_spin, n)``.
+        - ``alpha1-rel`` (control): relative amplitude noise on ``alpha1``.
+        - ``alpha2-rel`` (control): relative amplitude noise on ``alpha2``.
         """
-        decoherence = noise.decoherence
-        if not (decoherence.enabled and decoherence.any_rate_positive):
-            return []
+        n_levels = params.n_levels
+        spin_identity = np.eye(4, dtype=complex)
+        motion_identity = np.eye(n_levels, dtype=complex)
+        single_identity = np.eye(2, dtype=complex)
+        sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
+        sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
+        number = number_operator(n_levels)
+        x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+        s_phi = two_qubit_spin_phase_mode(params.phi_s, params.mode_vector)
+
+        # The control-kind operators must match the corresponding control
+        # Hamiltonian terms exactly (same operator, same eta/mode conventions):
+        # the propagator applies them as amplitude * sigma * operator, so any
+        # mismatch would silently change the meaning of the relative sigmas.
+        return [
+            NoiseTerm(
+                kind="static",
+                name="spin-shift",
+                coefficient=fluctuations.sigma_static_spin_dephasing,
+                operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
+                definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
+                usage="added directly to H_fluctuation",
+            ),
+            NoiseTerm(
+                kind="static",
+                name="motion-shift",
+                coefficient=fluctuations.sigma_static_motional_frequency,
+                operator=np.kron(spin_identity, number),
+                definition="kron(I_spin, number_operator)",
+                usage="added directly to H_fluctuation",
+            ),
+            NoiseTerm(
+                kind="control",
+                name="alpha1-rel",
+                coefficient=fluctuations.sigma_control_alpha1_relative,
+                operator=np.kron(spin_identity, number),
+                definition="kron(I_spin, number_operator)",
+                usage="alpha1(t) * control[0]",
+            ),
+            NoiseTerm(
+                kind="control",
+                name="alpha2-rel",
+                coefficient=fluctuations.sigma_control_alpha2_relative,
+                operator=params.eta * np.kron(s_phi, x1),
+                definition=(
+                    f"eta * kron(S_phi(mode={tuple(params.mode_vector)}), X1), "
+                    f"X1=(a + adag)/2, eta={params.eta:.12g}"
+                ),
+                usage="alpha2(t) * control[1]",
+            ),
+        ]
+
+    def collapse_operators(self, params, decoherence):
         return spin_boson_collapse_operators(
             params.n_levels,
             gamma_heating=decoherence.gamma_heating,
             gamma_motional_dephasing=decoherence.gamma_motional_dephasing,
             gamma_spin_dephasing=decoherence.gamma_spin_dephasing,
+        )
+
+    def control_bounds(self, params):
+        alpha1_lower, alpha1_upper = khz_bounds_to_rad_s(params.alpha1_khz_bounds)
+        alpha2_lower, alpha2_upper = khz_bounds_to_rad_s(params.alpha2_khz_bounds)
+        return (
+            np.array([alpha1_lower, alpha2_lower], dtype=float),
+            np.array([alpha1_upper, alpha2_upper], dtype=float),
         )
 
     def build_initial_pulse(self, params, pulse_config):
@@ -442,19 +394,9 @@ class SpinBosonDefinition:
         ``pulse_config.random_seed`` is set), clipped back into bounds.
         ``alpha2`` starts flat at its upper bound; the endpoint-zero
         constraint is applied later by the parameterization, not here.
-        Durations arrive in microseconds and are converted to seconds to
-        match the rad/s amplitudes.
         """
-        n_steps = pulse_config.n_steps
-        if n_steps < 1:
-            raise ValueError("n_steps must be at least 1.")
-        total_time = float(pulse_config.total_time_us) * 1e-6
-        if total_time <= 0.0:
-            raise ValueError("total_time_us must be positive.")
-
-        alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(params.alpha1_khz_bounds)
-        alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(params.alpha2_khz_bounds)
-        dt = total_time / n_steps
+        n_steps, dt = validate_pulse_config(pulse_config)
+        (alpha1_lower, _), (alpha1_upper, alpha2_upper) = self.control_bounds(params)
 
         alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
         alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
@@ -502,4 +444,29 @@ class SpinBosonDefinition:
         """
         return motion_resolved_gate_state_pairs(
             self.target_gate(params), params.n_levels
+        )
+
+    # ---- presentation hooks --------------------------------------------------
+
+    def control_channels(self, params):
+        return [
+            ControlChannel(label="alpha1", display_scale=1.0 / RAD_S_PER_KHZ, display_unit="kHz"),
+            ControlChannel(label="alpha2", display_scale=1.0 / RAD_S_PER_KHZ, display_unit="kHz"),
+        ]
+
+    def population_structure(self, params):
+        return PopulationStructure(
+            dims=(4, params.n_levels),
+            names=("two-qubit spin", "motion"),
+            labels=(
+                ("|00>", "|01>", "|10>", "|11>"),
+                tuple(f"n={level}" for level in range(params.n_levels)),
+            ),
+        )
+
+    def probe_state_pair(self, params):
+        return StateProbe(
+            initial_state=basis_state(0, 4 * params.n_levels),
+            target_state=ms_bell_target_motion_ground(params.n_levels),
+            description="|00>|n=0> -> MS Bell state, motion ground",
         )
