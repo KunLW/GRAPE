@@ -771,6 +771,7 @@ def write_optimization_preview_report(
     channels,
     noisy_system,
     noise_specs,
+    decoherence_channels,
     state_pairs,
     kappa_metrics,
     custom_initial_metadata,
@@ -820,6 +821,19 @@ def write_optimization_preview_report(
             noise_term_rows(noisy_system, noise_specs),
         ),
         "",
+        *(
+            (
+                "## Decoherence Channels",
+                "",
+                _markdown_table(
+                    ("Channel", "Rate (1/s)", "Definition", "Spectral Norm"),
+                    decoherence_channel_rows(decoherence_channels),
+                ),
+                "",
+            )
+            if decoherence_channels
+            else ()
+        ),
         "## Results",
         "",
         "_Optimization has not completed yet. Final results will be appended here._",
@@ -941,6 +955,18 @@ def noise_term_rows(system, specs):
             )
         )
     return rows
+
+
+def decoherence_channel_rows(channels):
+    return [
+        (
+            channel.name,
+            channel.rate,
+            channel.definition,
+            float(np.linalg.norm(channel.matrix, ord=2)),
+        )
+        for channel in channels
+    ]
 
 
 def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, collapse_operators=()):
@@ -1194,6 +1220,12 @@ def build_parameterization(config, pulse):
     )
 
 
+def build_decoherence_channels(config):
+    return system_definition(config).build_decoherence_channels(
+        config.system.params, config.system.noise
+    )
+
+
 def build_collapse_operators(config):
     return system_definition(config).build_collapse_operators(
         config.system.params, config.system.noise
@@ -1311,7 +1343,8 @@ def run_perturbative_experiment(
         for warning in custom_initial_metadata["warnings"]:
             print(warning, file=sys.stderr, flush=True)
     state_pairs = build_state_pairs(config)
-    collapse_operators = build_collapse_operators(config)
+    decoherence_channels = build_decoherence_channels(config)
+    collapse_operators = [channel.matrix for channel in decoherence_channels]
     optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
@@ -1441,6 +1474,7 @@ def run_perturbative_experiment(
         channels=channels,
         noisy_system=noisy_system,
         noise_specs=noise_specs,
+        decoherence_channels=decoherence_channels,
         state_pairs=state_pairs,
         kappa_metrics=kappa_metrics,
         custom_initial_metadata=custom_initial_metadata,

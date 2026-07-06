@@ -59,8 +59,11 @@ essentially pure physics.
    - `target_gate(params)` / `state_pairs(params)` → target unitary and the
      weighted `StatePair` average defining the gate fidelity
 3. Optionally override:
-   - `collapse_operators(params, decoherence)` → already-scaled jump
-     operators `L = sqrt(gamma) A` (default: none)
+   - `decoherence_channels(params, decoherence)` → list of
+     `DecoherenceChannel` (declarative like `noise_terms`; the base class
+     gates on `enabled`/`any_rate_positive`, drops zero-rate channels, and
+     applies the `L = sqrt(gamma) * A` scaling; default: none). Active
+     channels are documented in the report's Decoherence Channels table.
    - `build_initial_pulse` / `build_parameterization` — the defaults are
      flat-at-midpoint amplitudes and a plain `BoundedAmplitudeParameterization`
      from `control_bounds`

@@ -63,6 +63,34 @@ class NoiseTerm:
 
 
 @dataclass(frozen=True)
+class DecoherenceChannel:
+    """One Lindblad channel, declared unscaled (parallel to ``NoiseTerm``).
+
+    ``rate`` is gamma in 1/s; the jump operator handed to the decoherence
+    correction is ``matrix = sqrt(rate) * operator`` (unlike ``NoiseTerm``,
+    whose coefficient multiplies linearly). ``definition`` is the
+    human-readable operator description for the report.
+    """
+
+    name: str
+    rate: float
+    operator: np.ndarray
+    definition: str
+
+    def __post_init__(self):
+        rate = float(self.rate)
+        if rate < 0.0:
+            raise ValueError("decoherence rates must be non-negative.")
+        object.__setattr__(self, "rate", rate)
+        object.__setattr__(self, "operator", np.asarray(self.operator, dtype=complex))
+
+    @property
+    def matrix(self):
+        """The scaled jump operator ``L = sqrt(rate) * operator``."""
+        return np.sqrt(self.rate) * self.operator
+
+
+@dataclass(frozen=True)
 class DecoherenceConfigBase:
     """Base for ``system.noise.decoherence`` dataclasses.
 
@@ -142,7 +170,8 @@ class SystemDefinitionBase:
 
     and may override::
 
-        collapse_operators(params, decoherence)     jump operators (default: none)
+        decoherence_channels(params, decoherence)   list of DecoherenceChannel
+                                                    (default: none)
         build_parameterization / build_initial_pulse (defaults derived from
                                                      control_bounds)
         control_channels / population_structure / probe_state_pair
@@ -162,7 +191,8 @@ class SystemDefinitionBase:
     def control_bounds(self, params):
         raise NotImplementedError
 
-    def collapse_operators(self, params, decoherence):
+    def decoherence_channels(self, params, decoherence):
+        """Declarative Lindblad channels, parallel to ``noise_terms``."""
         return []
 
     # ---- generic driver interface ------------------------------------------
@@ -185,12 +215,28 @@ class SystemDefinitionBase:
         )
         return system, noisy_system, [term.as_spec() for term in terms]
 
-    def build_collapse_operators(self, params, noise):
-        """Jump operators for the Lindblad correction; empty means "skip"."""
+    def build_decoherence_channels(self, params, noise):
+        """Validated, active Lindblad channels; empty when gated off.
+
+        Applies the ``enabled``/``any_rate_positive`` gate and drops
+        zero-rate channels, so the returned list contains exactly the
+        channels that contribute to the decoherence correction.
+        """
         decoherence = noise.decoherence
         if not (decoherence.enabled and decoherence.any_rate_positive):
             return []
-        return self.collapse_operators(params, decoherence)
+        return [
+            channel
+            for channel in self.decoherence_channels(params, decoherence)
+            if channel.rate > 0.0
+        ]
+
+    def build_collapse_operators(self, params, noise):
+        """Scaled jump operators for the Lindblad correction; empty means "skip"."""
+        return [
+            channel.matrix
+            for channel in self.build_decoherence_channels(params, noise)
+        ]
 
     def build_parameterization(self, params, pulse):
         lower, upper = self.control_bounds(params)

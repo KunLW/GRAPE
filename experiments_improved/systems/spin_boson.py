@@ -53,7 +53,6 @@ from quantum_control import (
     motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     number_operator,
-    spin_boson_collapse_operators,
     spin_boson_control_system,
     spin_boson_parameterization,
     two_qubit_spin_phase_mode,
@@ -62,6 +61,7 @@ from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
 from experiments_improved.systems.common import (
     ControlChannel,
+    DecoherenceChannel,
     DecoherenceConfigBase,
     NoiseTerm,
     PopulationStructure,
@@ -154,8 +154,8 @@ class SpinBosonParams:
 class SpinBosonDecoherence(DecoherenceConfigBase):
     """Lindblad decoherence rates (``system.noise.decoherence`` YAML schema).
 
-    All rates are in 1/s and feed ``spin_boson_collapse_operators``; the
-    ``enabled`` switch and ``any_rate_positive`` gating come from
+    All rates are in 1/s and feed ``SpinBosonDefinition.decoherence_channels``;
+    the ``enabled`` switch and ``any_rate_positive`` gating come from
     ``DecoherenceConfigBase``.
 
     Attributes:
@@ -369,13 +369,41 @@ class SpinBosonDefinition(SystemDefinitionBase):
             ),
         ]
 
-    def collapse_operators(self, params, decoherence):
-        return spin_boson_collapse_operators(
-            params.n_levels,
-            gamma_heating=decoherence.gamma_heating,
-            gamma_motional_dephasing=decoherence.gamma_motional_dephasing,
-            gamma_spin_dephasing=decoherence.gamma_spin_dephasing,
+    def decoherence_channels(self, params, decoherence):
+        """The three Lindblad channels of the trapped-ion model.
+
+        Same operators and ordering as ``spin_boson_collapse_operators`` in
+        quantum_control (kept there for legacy callers); the base class
+        applies the ``sqrt(gamma)`` scaling and drops zero-rate channels.
+        """
+        n_levels = params.n_levels
+        spin_identity = np.eye(4, dtype=complex)
+        single_identity = np.eye(2, dtype=complex)
+        motion_identity = np.eye(n_levels, dtype=complex)
+        sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
+        sz_collective = 0.5 * (
+            np.kron(sz, single_identity) + np.kron(single_identity, sz)
         )
+        return [
+            DecoherenceChannel(
+                name="heating",
+                rate=decoherence.gamma_heating,
+                operator=np.kron(spin_identity, creation_operator(n_levels)),
+                definition="kron(I_spin, adag)",
+            ),
+            DecoherenceChannel(
+                name="motion-dephasing",
+                rate=decoherence.gamma_motional_dephasing,
+                operator=np.kron(spin_identity, number_operator(n_levels)),
+                definition="kron(I_spin, number_operator)",
+            ),
+            DecoherenceChannel(
+                name="spin-dephasing",
+                rate=decoherence.gamma_spin_dephasing,
+                operator=np.kron(sz_collective, motion_identity),
+                definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
+            ),
+        ]
 
     def control_bounds(self, params):
         alpha1_lower, alpha1_upper = khz_bounds_to_rad_s(params.alpha1_khz_bounds)
