@@ -314,8 +314,10 @@ def export_pulse_controls(
         channel_names=channel_names,
     )
 
-    if tuple(channel_names.tolist()) != ("alpha1", "alpha2"):
-        raise ValueError("CSV pulse export currently expects alpha1 and alpha2 channels.")
+    # Column layout matches the historical alpha1/alpha2 format: rad/s
+    # columns for every channel, then converted (rad_s_per_khz-divided)
+    # columns for every channel.
+    names = channel_names.tolist()
     with csv_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(
@@ -323,10 +325,8 @@ def export_pulse_controls(
                 "step_index",
                 "time_s",
                 "time_us",
-                "alpha1_rad_s",
-                "alpha2_rad_s",
-                "alpha1_khz",
-                "alpha2_khz",
+                *(f"{name}_rad_s" for name in names),
+                *(f"{name}_khz" for name in names),
             ]
         )
         for index in range(pulse.n_steps):
@@ -335,10 +335,14 @@ def export_pulse_controls(
                     int(step_index[index]),
                     _format_csv_float(time_s[index]),
                     _format_csv_float(time_us[index]),
-                    _format_csv_float(amplitudes[index, 0]),
-                    _format_csv_float(amplitudes[index, 1]),
-                    _format_csv_float(amplitudes[index, 0] / rad_s_per_khz),
-                    _format_csv_float(amplitudes[index, 1] / rad_s_per_khz),
+                    *(
+                        _format_csv_float(amplitudes[index, channel])
+                        for channel in range(len(names))
+                    ),
+                    *(
+                        _format_csv_float(amplitudes[index, channel] / rad_s_per_khz)
+                        for channel in range(len(names))
+                    ),
                 ]
             )
     return npz_path, csv_path

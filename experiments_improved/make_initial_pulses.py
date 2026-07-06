@@ -7,7 +7,7 @@ Each pulse is a (n_steps, 2) array of control amplitudes in rad/s:
 
 alpha2 must be exactly zero at the first and last step (the endpoint-zero
 constraint enforced by ``Alpha2EndpointZeroParameterization``). Files are saved
-with a matching ``dt`` so they load through ``spin_boson_open.py`` without a
+with a matching ``dt`` so they load through ``run_experiment.py`` without a
 dt-mismatch warning.
 
 Usage:

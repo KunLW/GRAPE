@@ -17,7 +17,7 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 
-from spin_boson_open import (
+from run_experiment import (
     OUTPUT_DIR,
     default_experiment_config,
     evaluate_pulse,

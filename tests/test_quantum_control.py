@@ -2015,7 +2015,7 @@ from experiments_improved.config_io import (
     write_config_snapshot,
 )
 from experiments_improved.systems import get_system
-from experiments_improved import spin_boson_open as sbo
+from experiments_improved import run_experiment as sbo
 
 
 def _yaml_config_file(tmp_path, text):
@@ -2086,8 +2086,8 @@ def test_yaml_config_physics_knobs_reach_system(tmp_path):
     config = sbo.parse_args(["--config", str(path)])
     _system, _noisy, specs = sbo.build_systems(config)
     by_name = {spec["name"]: spec for spec in specs}
-    assert by_name["static[1]"]["coefficient"] == 42.0
-    assert "mode=(0.5, 0.5)" in by_name["control[1]"]["definition"]
+    assert by_name["motion-shift"]["coefficient"] == 42.0
+    assert "mode=(0.5, 0.5)" in by_name["alpha2-rel"]["definition"]
     pulse_a = sbo.build_initial_pulse(config)
     pulse_b = sbo.build_initial_pulse(config)
     np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
