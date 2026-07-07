@@ -2,8 +2,10 @@ from experiments.spin_boson_perturbative_lbfgsb import (
     N_LEVELS,
     spin_boson_noisy_control_system,
 )
-from quantum_control import (
+from physical_systems.spin_boson import (
     motion_resolved_gate_state_pairs,
+)
+from quantum_control import (
     ms_xx_pi_over_2_gate,
 )
 

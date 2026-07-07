@@ -31,7 +31,8 @@ from quantum_control import (
     ControlProblem,
     EvolutionContext,
     ExpansionFidelity,
-    IonTrapRFSystem,
+    FluctuationTerm,
+    OpenSystem,
     PerturbativeExpansionDifferentiator,
     PerturbativeExpansionEvolution,
     PerturbativeStepBuilder,
@@ -41,11 +42,13 @@ from quantum_control import (
 sx = np.array([[0, 1], [1, 0]], dtype=complex)
 sz = np.array([[1, 0], [0, -1]], dtype=complex)
 
-system = IonTrapRFSystem(
+system = OpenSystem(
     drift=np.zeros((2, 2), dtype=complex),
     controls=[sx],
-    static_fluctuations=[0.01 * sz],
-    control_fluctuations=[0.02 * sx],
+    noise_terms=[
+        FluctuationTerm(name="dephasing", operator=sz, definition="sigma_z", coefficient=0.01, kind="static"),
+        FluctuationTerm(name="amplitude", operator=sx, definition="sigma_x", coefficient=0.02, kind="control"),
+    ],
 )
 pulse = PiecewiseConstantPulse(np.full((20, 1), 0.1), dt=0.05)
 context = EvolutionContext(
@@ -152,13 +155,15 @@ gradient = averaged_problem.gradient()
 The spin-boson helper builds the Hamiltonian
 `H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) eta S_phi ⊗ X1`,
 where `X1 = (a† + a) / 2` and the default `eta = 0.075`. It is represented
-as a two-channel fluctuating closed system with two spin qubits. The spin term is
+as a two-channel system with two spin qubits (a `ClosedSystem`, or an
+`OpenSystem` when noise terms are attached). The spin term is
 `S_phi = b_1 sigma_phi ⊗ I + b_2 I ⊗ sigma_phi`; the default stretch-mode
 vector is `b = (1, -1) / 2`, and the COM-mode vector is `b = (1, 1) / 2`.
 The pulse array has shape `(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1
 is `alpha_2(t)`.
-Optional `static_fluctuations` and `control_fluctuations` use the same
-already-scaled `sigma H` convention as `IonTrapRFSystem`. The pulse helper takes
+Optional `static_fluctuations` and `control_fluctuations` use the
+already-scaled `sigma H` convention (wrapped into unit-strength
+`FluctuationTerm`s on an `OpenSystem`). The pulse helper takes
 user-facing bounds in kHz and total time in microseconds, then stores amplitudes
 as angular frequencies in rad/s and `dt` in seconds.
 
@@ -173,6 +178,8 @@ from quantum_control import (
     ParameterizedControlProblem,
     StateTransferFidelity,
     UnitaryStepBuilder,
+)
+from physical_systems.spin_boson import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,

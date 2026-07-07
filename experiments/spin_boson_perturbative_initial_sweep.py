@@ -25,7 +25,11 @@ from experiments.spin_boson_perturbative_lbfgsb import (
     Alpha2EndpointZeroParameterization,
     run_perturbative_experiment,
 )
-from quantum_control import PiecewiseConstantPulse, spin_boson_initial_pulse, spin_boson_parameterization
+from physical_systems.spin_boson import (
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
+)
+from quantum_control import PiecewiseConstantPulse
 
 
 SUMMARY_FIELDS = (

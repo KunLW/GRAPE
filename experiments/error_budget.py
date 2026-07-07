@@ -4,11 +4,13 @@ from experiments.spin_boson_perturbative_lbfgsb import (
     N_LEVELS,
     spin_boson_noisy_control_system,
 )
+from physical_systems.spin_boson import (
+    motion_resolved_gate_state_pairs,
+)
 from quantum_control import (
     ErrorBudgetConfig,
     evaluate_error_budget,
     load_pulse_npz,
-    motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     write_error_budget_report,
 )

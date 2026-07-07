@@ -51,7 +51,7 @@ from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
 from experiments_improved.config_io import load_experiment_config, write_config_snapshot
-from experiments_improved.system_definitions import get_system
+from physical_systems import get_system
 
 N_STEPS = 200
 MAXITER = 40
@@ -71,7 +71,7 @@ def _default_system_noise():
 class SystemSelection:
     """Pluggable physical system: registry key plus its params/noise configs.
 
-    ``type`` selects the system definition (see ``system_definitions/``); ``params`` and
+    ``type`` selects the system definition (see ``physical_systems/``); ``params`` and
     ``noise`` are that system's frozen dataclasses, so their YAML schema is
     owned by the system module rather than this driver.
     """
@@ -327,7 +327,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Run a config-driven perturbative open-gate optimization; the "
-            "physical system is selected by system.type (see experiments_improved/system_definitions)."
+            "physical system is selected by system.type (see physical_systems/)."
         )
     )
     parser.add_argument(
@@ -769,9 +769,7 @@ def write_optimization_preview_report(
     initial_pulse,
     parameterization,
     channels,
-    noisy_system,
-    noise_specs,
-    decoherence_channels,
+    open_system,
     state_pairs,
     kappa_metrics,
     custom_initial_metadata,
@@ -814,11 +812,11 @@ def write_optimization_preview_report(
         "",
         _markdown_table(("Metric", "Value", "Definition"), validity_rows(kappa_metrics)),
         "",
-        "## Noise Terms",
+        "## Fluctuation Terms",
         "",
         _markdown_table(
             ("Term", "Coefficient", "Definition", "Usage", "Spectral Norm"),
-            noise_term_rows(noisy_system, noise_specs),
+            fluctuation_term_rows(open_system),
         ),
         "",
         *(
@@ -827,11 +825,11 @@ def write_optimization_preview_report(
                 "",
                 _markdown_table(
                     ("Channel", "Rate (1/s)", "Definition", "Spectral Norm"),
-                    decoherence_channel_rows(decoherence_channels),
+                    decoherence_channel_rows(open_system.decoherence_channels),
                 ),
                 "",
             )
-            if decoherence_channels
+            if open_system.decoherence_channels
             else ()
         ),
         "## Results",
@@ -940,21 +938,17 @@ def append_optimization_results_report(
     return report_path
 
 
-def noise_term_rows(system, specs):
-    matrices = tuple(system.static_fluctuations) + tuple(system.control_fluctuations)
-    rows = []
-    for spec, matrix in zip(specs, matrices, strict=True):
-        matrix = np.asarray(matrix)
-        rows.append(
-            (
-                spec["name"],
-                spec["coefficient"],
-                spec["definition"],
-                spec["usage"],
-                float(np.linalg.norm(matrix, ord=2)),
-            )
+def fluctuation_term_rows(open_system):
+    return [
+        (
+            term.name,
+            term.coefficient,
+            term.definition,
+            term.usage,
+            float(np.linalg.norm(term.matrix, ord=2)),
         )
-    return rows
+        for term in open_system.fluctuation_terms
+    ]
 
 
 def decoherence_channel_rows(channels):
@@ -969,7 +963,7 @@ def decoherence_channel_rows(channels):
     ]
 
 
-def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, collapse_operators=()):
+def calculate_kappa_metrics(system, open_system, pulse, parameterization, collapse_operators=()):
     lower, upper = parameterization.bounds_for(pulse.amplitudes.shape)
     channel_bounds = tuple(zip(lower[0], upper[0], strict=True))
     boundary_controls = np.asarray(
@@ -978,11 +972,11 @@ def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, colla
     ).reshape(len(channel_bounds), -1).T
     nominal_norms = []
     fluctuation_norms = []
-    has_fluctuations = bool(noisy_system.static_fluctuations or noisy_system.control_fluctuations)
+    has_fluctuations = bool(open_system.static_fluctuations or open_system.control_fluctuations)
     for controls in boundary_controls:
         nominal_norms.append(float(np.linalg.norm(system.nominal_hamiltonian(controls), ord=2)))
         fluctuation_norms.append(
-            float(np.linalg.norm(noisy_system.fluctuation_hamiltonian(controls), ord=2))
+            float(np.linalg.norm(open_system.fluctuation_hamiltonian(controls), ord=2))
             if has_fluctuations
             else 0.0
         )
@@ -1203,6 +1197,7 @@ def system_definition(config):
 
 
 def build_systems(config):
+    """Return ``(closed_system, open_system)`` from the system definition."""
     return system_definition(config).build_systems(
         config.system.params, config.system.noise
     )
@@ -1220,18 +1215,6 @@ def build_parameterization(config, pulse):
     )
 
 
-def build_decoherence_channels(config):
-    return system_definition(config).build_decoherence_channels(
-        config.system.params, config.system.noise
-    )
-
-
-def build_collapse_operators(config):
-    return system_definition(config).build_collapse_operators(
-        config.system.params, config.system.noise
-    )
-
-
 def build_target_gate(config):
     return system_definition(config).target_gate(config.system.params)
 
@@ -1242,7 +1225,7 @@ def build_state_pairs(config):
 
 def build_decoherence_correction_problem(
     config,
-    noisy_system,
+    open_system,
     pulse,
     state_pairs,
     collapse_operators,
@@ -1251,7 +1234,7 @@ def build_decoherence_correction_problem(
 ):
     step_builder = UnitaryStepBuilder()
     return ExpansionStateAverageFidelity(
-        system=noisy_system,
+        system=open_system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(
             step_builder,
@@ -1268,14 +1251,14 @@ def build_decoherence_correction_problem(
     )
 
 
-def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
+def build_objective_problem(config, open_system, initial_pulse, state_pairs):
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(
         max_order=config.objective.max_order,
         drop_odd_average=config.objective.drop_odd_average,
     )
     expansion_problem = ExpansionStateAverageFidelity(
-        system=noisy_system,
+        system=open_system,
         pulse=initial_pulse,
         evolution=PerturbativeExpansionEvolution(
             step_builder,
@@ -1290,12 +1273,12 @@ def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
         normalize_weights=config.objective.normalize_weights,
         n_workers=config.runtime.workers,
     )
-    collapse_operators = build_collapse_operators(config)
+    collapse_operators = getattr(open_system, "collapse_operators", ())
     if not collapse_operators:
         return expansion_problem
     decoherence_problem = build_decoherence_correction_problem(
         config,
-        noisy_system,
+        open_system,
         initial_pulse,
         state_pairs,
         collapse_operators,
@@ -1330,7 +1313,7 @@ def run_perturbative_experiment(
     # export_pulse_controls divides amplitudes by this to get display units;
     # assumes a common display scale across channels.
     export_unit_divisor = 1.0 / channels[0].display_scale
-    system, noisy_system, noise_specs = build_systems(config)
+    system, open_system = build_systems(config)
     initial_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, initial_pulse)
     custom_initial_metadata = None
@@ -1343,9 +1326,8 @@ def run_perturbative_experiment(
         for warning in custom_initial_metadata["warnings"]:
             print(warning, file=sys.stderr, flush=True)
     state_pairs = build_state_pairs(config)
-    decoherence_channels = build_decoherence_channels(config)
-    collapse_operators = [channel.matrix for channel in decoherence_channels]
-    optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
+    collapse_operators = open_system.collapse_operators
+    optimization_problem = build_objective_problem(config, open_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
         parameterization,
@@ -1426,7 +1408,7 @@ def run_perturbative_experiment(
         (
             "initial_noisy_gate_fidelity",
             noisy_gate_fidelity(
-                noisy_system,
+                open_system,
                 masked_initial_pulse,
                 state_pairs,
                 collapse_operators=collapse_operators,
@@ -1442,7 +1424,7 @@ def run_perturbative_experiment(
             return 0.0
         correction_problem = build_decoherence_correction_problem(
             config,
-            noisy_system,
+            open_system,
             pulse,
             state_pairs,
             collapse_operators,
@@ -1460,7 +1442,7 @@ def run_perturbative_experiment(
         )
     kappa_metrics = calculate_kappa_metrics(
         system,
-        noisy_system,
+        open_system,
         masked_initial_pulse,
         parameterization,
         collapse_operators=collapse_operators,
@@ -1473,9 +1455,7 @@ def run_perturbative_experiment(
         initial_pulse=initial_pulse,
         parameterization=parameterization,
         channels=channels,
-        noisy_system=noisy_system,
-        noise_specs=noise_specs,
-        decoherence_channels=decoherence_channels,
+        open_system=open_system,
         state_pairs=state_pairs,
         kappa_metrics=kappa_metrics,
         custom_initial_metadata=custom_initial_metadata,
@@ -1492,7 +1472,7 @@ def run_perturbative_experiment(
             step=step,
             close_fidelity=closed_gate_fidelity(system, pulse, state_pairs),
             open_fidelity=noisy_gate_fidelity(
-                noisy_system,
+                open_system,
                 pulse,
                 state_pairs,
                 collapse_operators=collapse_operators,
@@ -1506,7 +1486,7 @@ def run_perturbative_experiment(
         )
         if fidelity_terms_log is not None:
             fidelity_summary, fidelity_pair_rows = perturbative_fidelity_terms(
-                noisy_system,
+                open_system,
                 pulse,
                 state_pairs,
                 max_order=config.objective.max_order,
@@ -1615,14 +1595,14 @@ def run_perturbative_experiment(
         state_pairs,
     )
     initial_noisy_gate_fidelity = noisy_gate_fidelity(
-        noisy_system,
+        open_system,
         masked_initial_pulse,
         state_pairs,
         collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
     final_noisy_gate_fidelity = noisy_gate_fidelity(
-        noisy_system,
+        open_system,
         final_pulse,
         state_pairs,
         collapse_operators=collapse_operators,
@@ -1865,7 +1845,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     channels = definition.control_channels(params)
     channel_names = tuple(channel.label for channel in channels)
     export_unit_divisor = 1.0 / channels[0].display_scale
-    system, noisy_system, _noise_specs = build_systems(config)
+    system, open_system = build_systems(config)
     reference_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, reference_pulse)
     custom_initial_metadata = None
@@ -1894,10 +1874,10 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     )
 
     state_pairs = build_state_pairs(config)
-    collapse_operators = build_collapse_operators(config)
+    collapse_operators = open_system.collapse_operators
     close_fidelity = closed_gate_fidelity(system, evaluated_pulse, state_pairs)
     noisy_fidelity = noisy_gate_fidelity(
-        noisy_system,
+        open_system,
         evaluated_pulse,
         state_pairs,
         collapse_operators=collapse_operators,
@@ -1958,7 +1938,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     if collapse_operators:
         correction_problem = build_decoherence_correction_problem(
             config,
-            noisy_system,
+            open_system,
             evaluated_pulse,
             state_pairs,
             collapse_operators,

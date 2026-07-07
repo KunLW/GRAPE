@@ -39,20 +39,35 @@ from experiments.spin_boson_perturbative_lbfgsb import (
     spin_boson_noise_term_specs,
     spin_boson_noisy_control_system,
 )
-from quantum_control import (
-    ControlProblem,
+from physical_systems.spin_boson import (
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
+    annihilation_operator,
+    creation_operator,
+    motion_resolved_gate_state_pairs,
+    number_operator,
+    spin_boson_collapse_operators,
+    spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
+    spin_phase_operator,
+    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
+)
+from quantum_control import (
+    ClosedSystem,
+    ControlProblem,
+    DecoherenceChannel,
     EvolutionContext,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     GrapeDifferentiator,
-    IonTrapRFSystem,
+    FluctuationTerm,
     LindbladCorrectedStateFidelity,
     LindbladExpansionDifferentiator,
     LindbladExpansionEvolution,
-    LindbladOpenSystem,
+    OpenSystem,
     NominalUnitaryEvolution,
     ParameterSmoothPenalty,
     ParameterizedControlProblem,
@@ -65,22 +80,11 @@ from quantum_control import (
     StateTransferFidelity,
     StatePair,
     UnitaryStepBuilder,
-    annihilation_operator,
     closed_gate_fidelity,
-    creation_operator,
     endpoint_masked_parameterization,
-    motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
-    number_operator,
     noisy_gate_fidelity,
     single_qubit_logical_test_states,
-    spin_boson_collapse_operators,
-    spin_boson_control_system,
-    spin_boson_initial_pulse,
-    spin_boson_parameterization,
-    spin_phase_operator,
-    two_qubit_spin_phase_mode,
-    two_qubit_spin_phase_difference,
     two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
@@ -835,10 +839,29 @@ def test_sweep_run_specs_include_both_modes_with_deterministic_labels(tmp_path):
     assert all(spec["experiment_dir"].parent == tmp_path for spec in specs)
 
 
+def open_system_from_matrices(
+    drift, controls, static_fluctuations=(), control_fluctuations=(), collapse_operators=()
+):
+    """Wrap pre-scaled matrices into unit-strength noise terms on an OpenSystem."""
+    noise_terms = [
+        FluctuationTerm(name=f"static[{i}]", operator=m, definition="", coefficient=1.0, kind="static")
+        for i, m in enumerate(static_fluctuations)
+    ]
+    noise_terms += [
+        FluctuationTerm(name=f"control[{i}]", operator=m, definition="", coefficient=1.0, kind="control")
+        for i, m in enumerate(control_fluctuations)
+    ]
+    noise_terms += [
+        DecoherenceChannel(name=f"collapse[{i}]", operator=op, definition="", rate=1.0)
+        for i, op in enumerate(collapse_operators)
+    ]
+    return OpenSystem(drift=drift, controls=controls, noise_terms=tuple(noise_terms))
+
+
 def two_level_problem(amplitudes, initial_state=None, target_state=None):
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.1 * sz,
         controls=[sx],
         static_fluctuations=[0.01 * sz],
@@ -1350,11 +1373,11 @@ def test_expansion_evolution_returns_ordered_components():
     assert result.forward[-1].components[0].shape == (2,)
 
 
-def test_ion_trap_fluctuation_hamiltonian_matches_noise_formula():
+def test_open_system_fluctuation_hamiltonian_matches_noise_formula():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sy = np.array([[0, -1j], [1j, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=np.zeros((2, 2), dtype=complex),
         controls=[sx, sy],
         static_fluctuations=[0.01 * sz, 0.02 * sx],
@@ -1419,7 +1442,7 @@ def test_perturbative_gradient_frechet_dv_derivative_matches_finite_difference()
 
 def test_perturbative_v_method_leading_matches_default_and_frechet_commuting_case():
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.2 * sz,
         controls=[0.3 * sz],
         static_fluctuations=[0.01 * sz],
@@ -1438,7 +1461,7 @@ def test_perturbative_v_method_leading_matches_default_and_frechet_commuting_cas
 def test_perturbative_v_method_frechet_is_finite_for_noncommuting_case():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.2 * sz,
         controls=[sx],
         static_fluctuations=[0.03 * sx],
@@ -1526,16 +1549,18 @@ def test_error_budget_cli_smoke_test(tmp_path):
         "\n".join(
             [
                 "import numpy as np",
-                "from quantum_control import IonTrapRFSystem, StatePair",
+                "from quantum_control import FluctuationTerm, OpenSystem, StatePair",
                 "",
                 "def build():",
                 "    sx = np.array([[0, 1], [1, 0]], dtype=complex)",
                 "    sz = np.array([[1, 0], [0, -1]], dtype=complex)",
-                "    system = IonTrapRFSystem(",
+                "    system = OpenSystem(",
                 "        drift=0.1 * sz,",
                 "        controls=[sx],",
-                "        static_fluctuations=[0.01 * sz],",
-                "        control_fluctuations=[0.02 * sx],",
+                "        noise_terms=[",
+                "            FluctuationTerm(name='s', operator=0.01 * sz, definition='', coefficient=1.0, kind='static'),",
+                "            FluctuationTerm(name='c', operator=0.02 * sx, definition='', coefficient=1.0, kind='control'),",
+                "        ],",
                 "    )",
                 "    pair = StatePair(",
                 "        np.array([1.0, 0.0], dtype=complex),",
@@ -1674,7 +1699,7 @@ def test_expansion_fidelity_drops_odd_average_and_keeps_second_order_terms():
 def test_zero_fluctuation_expansion_reduces_to_nominal_state_fidelity():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(drift=0.1 * sz, controls=[sx])
+    system = ClosedSystem(drift=0.1 * sz, controls=[sx])
     pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
     context = EvolutionContext(
         initial_state=np.array([1.0, 0.0], dtype=complex),
@@ -1812,7 +1837,7 @@ def two_level_lindblad_setup(amplitudes, gamma=0.02, dt=0.05, dW_method="first_o
     collapse_operators = (
         (np.sqrt(gamma) * sigma_minus, np.sqrt(0.5 * gamma) * sz) if gamma > 0.0 else ()
     )
-    system = LindbladOpenSystem(
+    system = open_system_from_matrices(
         drift=0.1 * sz,
         controls=[sx],
         collapse_operators=collapse_operators,
@@ -2016,7 +2041,7 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
         state_pairs=state_pairs,
     )
 
-    assert isinstance(system, LindbladOpenSystem)
+    assert isinstance(system, OpenSystem)
     assert len(collapse_operators) == 2
     value = problem.value()
     gradient = problem.gradient()
@@ -2037,7 +2062,7 @@ from experiments_improved.config_io import (
     load_experiment_config,
     write_config_snapshot,
 )
-from experiments_improved.system_definitions import get_system
+from physical_systems import get_system
 from experiments_improved import run_experiment as sbo
 
 
@@ -2107,10 +2132,10 @@ def test_yaml_config_physics_knobs_reach_system(tmp_path):
         ),
     )
     config = sbo.parse_args(["--config", str(path)])
-    _system, _noisy, specs = sbo.build_systems(config)
-    by_name = {spec["name"]: spec for spec in specs}
-    assert by_name["motion-shift"]["coefficient"] == 42.0
-    assert "mode=(0.5, 0.5)" in by_name["alpha2-rel"]["definition"]
+    _system, open_system = sbo.build_systems(config)
+    by_name = {term.name: term for term in open_system.fluctuation_terms}
+    assert by_name["motion-shift"].coefficient == 42.0
+    assert "mode=(0.5, 0.5)" in by_name["alpha2-rel"].definition
     pulse_a = sbo.build_initial_pulse(config)
     pulse_b = sbo.build_initial_pulse(config)
     np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
@@ -2133,14 +2158,15 @@ def test_yaml_config_enabled_flags(tmp_path):
         ),
     )
     config = sbo.parse_args(["--config", str(path)])
-    assert sbo.build_collapse_operators(config) == []
-    _system, noisy_system, specs = sbo.build_systems(config)
-    assert specs == []
-    assert len(noisy_system.static_fluctuations) == 0
+    _system, open_system = sbo.build_systems(config)
+    assert open_system.noise_terms == ()
+    assert open_system.collapse_operators == ()
+    assert len(open_system.static_fluctuations) == 0
 
     cli_config = sbo.parse_args(["--gamma-heating", "50.0"])
     assert cli_config.system.noise.decoherence.enabled
-    assert len(sbo.build_collapse_operators(cli_config)) == 1
+    _cli_system, cli_open_system = sbo.build_systems(cli_config)
+    assert len(cli_open_system.collapse_operators) == 1
 
 
 def test_yaml_config_unknown_keys_raise(tmp_path):
