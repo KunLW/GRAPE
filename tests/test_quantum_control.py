@@ -2245,6 +2245,23 @@ def test_yaml_config_cosine_initial_pulse_shape(tmp_path):
         sbo.build_initial_pulse(bad_config)
 
 
+def test_output_prefix_defaults_to_system_name(tmp_path):
+    config = sbo.default_experiment_config()
+    assert sbo.output_prefix(config) == "spin_boson"
+
+    path = _yaml_config_file(tmp_path, "output:\n  prefix: warmup\n")
+    config = sbo.parse_args(["--config", str(path)])
+    assert sbo.output_prefix(config) == "warmup"
+    assert "prefix: warmup" in config_to_yaml_str(config)
+
+    reloaded = load_experiment_config(
+        _yaml_config_file(tmp_path, config_to_yaml_str(config)),
+        sbo.default_experiment_config(),
+        get_system,
+    )
+    assert reloaded.output.prefix == "warmup"
+
+
 def test_yaml_config_enabled_flags(tmp_path):
     path = _yaml_config_file(
         tmp_path,

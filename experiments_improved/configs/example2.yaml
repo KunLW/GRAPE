@@ -15,10 +15,20 @@ system:
   params:
     initial_pulse_shape: cosine # the cosine/sine initial pulse
     alpha1_cycles: 1.0          # one full alpha1 cosine cycle over the pulse
+  noise:
+    fluctuations:               # long-correlation classical noise expansion
+      enabled: true
+      sigma_static_spin_dephasing: 314.159     # rad/s, static[0]
+      sigma_static_motional_frequency: 300    # rad/s, static[1]
+      sigma_control_alpha1_relative: 1.0e-4    # relative alpha1 amplitude noise
+      sigma_control_alpha2_relative: 1.0e-4    # relative alpha2 amplitude noise
 
 pulse:
-  n_steps: 200
+  n_steps: 400
   total_time_us: 225.8
 
 optimizer:
   maxiter: 40
+
+runtime:
+  workers: 10

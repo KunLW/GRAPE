@@ -31,13 +31,13 @@ system:
       gamma_spin_dephasing: 0.0       # rad/s, (sz (x) I + I (x) sz)/2
     fluctuations:               # long-correlation classical noise expansion
       enabled: true
-      sigma_static_spin_dephasing: 31.4159     # rad/s, static[0]
-      sigma_static_motional_frequency: 30.0    # rad/s, static[1]
+      sigma_static_spin_dephasing: 314.159     # rad/s, static[0]
+      sigma_static_motional_frequency: 300.0    # rad/s, static[1]
       sigma_control_alpha1_relative: 1.0e-4    # relative alpha1 amplitude noise
       sigma_control_alpha2_relative: 1.0e-4    # relative alpha2 amplitude noise
 
 pulse:
-  n_steps: 200
+  n_steps: 400
   total_time_us: 225.8
   # random_seed: 12345          # unset -> non-reproducible initial pulse noise
 
@@ -67,3 +67,5 @@ runtime:
 
 output:
   output_root: experiments_improved/outputs
+  # prefix: my_run              # run dir = <prefix>_<timestamp>; unset -> system name
+                                # (evaluate mode appends _evaluation to the prefix)

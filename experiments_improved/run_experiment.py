@@ -133,6 +133,9 @@ class RuntimeConfig:
 @dataclass(frozen=True)
 class OutputConfig:
     output_root: Path = field(default_factory=lambda: OUTPUT_DIR)
+    # Run-directory prefix; None means "use the registered system name"
+    # (config.system.type). Directories are named <prefix>_<timestamp>.
+    prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1196,6 +1199,14 @@ def system_definition(config):
     return get_system(config.system.type)
 
 
+def output_prefix(config):
+    """Run-directory prefix: ``output.prefix``, or the system name if unset."""
+    prefix = config.output.prefix
+    if prefix:
+        return str(prefix)
+    return config.system.type
+
+
 def build_systems(config):
     """Return ``(closed_system, open_system)`` from the system definition."""
     return system_definition(config).build_systems(
@@ -1358,7 +1369,7 @@ def run_perturbative_experiment(
     output_root = Path(output_root) if output_root is not None else config.output.output_root
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         output_root,
-        run_label or f"{config.system.type}_perturbative",
+        run_label or output_prefix(config),
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -1904,7 +1915,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     generated_at = generated_at or datetime.now()
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         config.output.output_root,
-        f"{config.system.type}_evaluation",
+        f"{output_prefix(config)}_evaluation",
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
