@@ -1,15 +1,13 @@
-from quantum_control.context import EvolutionContext
-from quantum_control.gate_metrics import (
+from quantum_control.problems.context import EvolutionContext
+from quantum_control.evaluation.density_matrix import faithful_gate_fidelity
+from quantum_control.evaluation.gate_metrics import (
     closed_gate_fidelity,
-    ms_xx_pi_over_2_gate,
     noisy_gate_fidelity,
-    single_qubit_logical_test_states,
-    two_qubit_logical_test_states,
 )
-from quantum_control.parameterized_problem import ParameterizedControlProblem
-from quantum_control.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
-from quantum_control.problem import ControlProblem
-from quantum_control.state_average import (
+from quantum_control.problems.parameterized_problem import ParameterizedControlProblem
+from quantum_control.problems.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
+from quantum_control.problems.problem import ControlProblem
+from quantum_control.problems.state_average import (
     CombinedStateAverageProblem,
     ExpansionStateAverageFidelity,
     StatePair,
@@ -87,11 +85,9 @@ __all__ = [
     "closed_gate_fidelity",
     "endpoint_masked_parameterization",
     "evaluate_error_budget",
+    "faithful_gate_fidelity",
     "khz_bounds_to_rad_s",
     "load_pulse_npz",
-    "ms_xx_pi_over_2_gate",
     "noisy_gate_fidelity",
-    "single_qubit_logical_test_states",
-    "two_qubit_logical_test_states",
     "write_error_budget_report",
 ]

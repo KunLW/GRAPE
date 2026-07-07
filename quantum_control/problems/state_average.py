@@ -6,7 +6,7 @@ from typing import Sequence
 
 import numpy as np
 
-from quantum_control.context import EvolutionContext
+from quantum_control.problems.context import EvolutionContext
 
 
 @dataclass(frozen=True)

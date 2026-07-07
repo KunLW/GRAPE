@@ -42,15 +42,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from quantum_control import (
-    RAD_S_PER_KHZ,
-    khz_bounds_to_rad_s,
-    ms_xx_pi_over_2_gate,
-    two_qubit_logical_test_states,
-)
+from quantum_control import RAD_S_PER_KHZ, khz_bounds_to_rad_s
 from quantum_control.pulses.parameterization import BoundedAmplitudeParameterization
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
-from quantum_control.state_average import StatePair
+from quantum_control.problems.state_average import StatePair
 from quantum_control.systems import (
     ClosedSystem,
     DecoherenceChannel,
@@ -127,6 +122,28 @@ def _collective_sz():
 # ---------------------------------------------------------------------------
 # Fidelity definition
 # ---------------------------------------------------------------------------
+
+def single_qubit_logical_test_states():
+    """The four tomography input states |0>, |1>, |+>, |+i> of one qubit."""
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    plus = (zero + one) / np.sqrt(2.0)
+    plus_i = (zero + 1j * one) / np.sqrt(2.0)
+    return (zero, one, plus, plus_i)
+
+
+def two_qubit_logical_test_states():
+    """All 16 tensor products of the single-qubit test states."""
+    states = single_qubit_logical_test_states()
+    return tuple(np.kron(left, right) for left in states for right in states)
+
+
+def ms_xx_pi_over_2_gate():
+    """The maximally entangling Molmer-Sorensen gate ``(I - i XX)/sqrt(2)``."""
+    sx = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    xx = np.kron(sx, sx)
+    return (np.eye(4, dtype=complex) - 1j * xx) / np.sqrt(2.0)
+
 
 def motion_resolved_gate_state_pairs(target_gate, n_levels):
     """Expand a 4x4 spin gate into weighted spin ⊗ motion ``StatePair``s.

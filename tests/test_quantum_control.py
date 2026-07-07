@@ -23,6 +23,9 @@ from experiments.reporting import (
     write_experiment_report,
 )
 from physical_systems.spin_boson import (
+    ms_xx_pi_over_2_gate,
+    single_qubit_logical_test_states,
+    two_qubit_logical_test_states,
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
@@ -42,6 +45,7 @@ from quantum_control import (
     ClosedSystem,
     CombinedStateAverageProblem,
     ControlProblem,
+    faithful_gate_fidelity,
     DecoherenceChannel,
     EvolutionContext,
     ExpansionFidelity,
@@ -66,10 +70,7 @@ from quantum_control import (
     UnitaryStepBuilder,
     closed_gate_fidelity,
     endpoint_masked_parameterization,
-    ms_xx_pi_over_2_gate,
     noisy_gate_fidelity,
-    single_qubit_logical_test_states,
-    two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
 from quantum_control.optimizers import ScipyOptimizer
@@ -661,6 +662,90 @@ def test_open_grape_optimization_improves_noisy_gate_fidelity():
 
     assert final > initial
     assert final > 0.95
+
+
+def test_faithful_gate_fidelity_matches_closed_fidelity_without_noise():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = ClosedSystem(drift=0.1 * sz, controls=[sx])
+    pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 0.6), StatePair(one, zero, 0.4))
+
+    faithful = faithful_gate_fidelity(system, pulse, state_pairs)
+    closed = closed_gate_fidelity(system, pulse, state_pairs)
+
+    assert np.allclose(faithful, closed, atol=1e-10)
+
+
+def test_faithful_gate_fidelity_matches_exact_lindblad_oracle():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)
+    gamma = 0.05
+    system = open_system_from_matrices(
+        drift=0.1 * sz,
+        controls=[sx],
+        collapse_operators=(np.sqrt(gamma) * sigma_minus,),
+    )
+    pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+
+    faithful = faithful_gate_fidelity(system, pulse, state_pairs)
+    rho_final = exact_lindblad_final_state(system, pulse, zero)
+    oracle = float(np.real(one.conj() @ rho_final @ one))
+    assert np.allclose(faithful, oracle, atol=1e-12)
+
+    # small kappa_3: the perturbative metric agrees to first order
+    perturbative = noisy_gate_fidelity(
+        system, pulse, state_pairs, collapse_operators=system.collapse_operators
+    )
+    kappa_3 = pulse.n_steps * pulse.dt * gamma
+    assert abs(faithful - perturbative) < kappa_3**2
+
+
+def test_faithful_gate_fidelity_matches_perturbative_for_small_fluctuations():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma = 0.05
+    system = OpenSystem(
+        drift=np.zeros((2, 2), dtype=complex),
+        controls=[sx],
+        noise_terms=[
+            FluctuationTerm(
+                name="dephasing", operator=sz, definition="sigma_z",
+                coefficient=sigma, kind="static",
+            ),
+        ],
+    )
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+    # same physical pulse at two step resolutions (total time 0.3 both ways)
+    coarse_pulse = PiecewiseConstantPulse(np.full((6, 1), 2.5), dt=0.05)
+    fine_pulse = PiecewiseConstantPulse(np.full((96, 1), 2.5), dt=0.003125)
+
+    faithful = faithful_gate_fidelity(system, fine_pulse, state_pairs, hermite_points=9)
+    perturbative = noisy_gate_fidelity(system, fine_pulse, state_pairs)
+    closed = closed_gate_fidelity(system, fine_pulse, state_pairs)
+
+    # the fluctuation correction is real and the faithful average captures it
+    correction = abs(closed - faithful)
+    assert correction > 1e-5
+    # at fine dt the second-order expansion reproduces >90% of the correction
+    assert abs(faithful - perturbative) < 0.1 * correction
+    # the faithful value is dt-exact; the perturbative metric converges to it
+    coarse_gap = abs(
+        faithful_gate_fidelity(system, coarse_pulse, state_pairs, hermite_points=9)
+        - noisy_gate_fidelity(system, coarse_pulse, state_pairs)
+    )
+    assert abs(faithful - perturbative) < coarse_gap / 4
+    # quadrature is converged: more nodes do not move the value
+    refined = faithful_gate_fidelity(system, fine_pulse, state_pairs, hermite_points=15)
+    assert np.allclose(faithful, refined, atol=1e-9)
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():

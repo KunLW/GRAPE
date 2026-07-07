@@ -29,6 +29,7 @@ from experiments.reporting import (
 )
 from quantum_control import (
     CombinedStateAverageProblem,
+    faithful_gate_fidelity,
     ExpansionFidelity,
     ExpansionStateAverageFidelity,
     EvolutionContext,
@@ -480,9 +481,24 @@ def parse_evaluate_args(argv=None):
         default=argparse.SUPPRESS,
         help="Number of worker processes for open-gate fidelity.",
     )
+    parser.add_argument(
+        "--faithful",
+        action="store_true",
+        help=(
+            "Also compute faithful_gate_fidelity: exact Lindblad density-matrix "
+            "propagation with Gauss-Hermite averaging over the fluctuations "
+            "(cost grows as hermite_points ** n_fluctuation_terms)."
+        ),
+    )
+    parser.add_argument(
+        "--hermite-points",
+        type=int,
+        default=5,
+        help="Gauss-Hermite nodes per fluctuation dimension for --faithful.",
+    )
     args = parser.parse_args(argv)
     base = _load_base_config(args.config)
-    return replace(
+    config = replace(
         base,
         pulse=replace(
             base.pulse,
@@ -495,6 +511,7 @@ def parse_evaluate_args(argv=None):
             no_progress=True,
         ),
     )
+    return config, {"faithful": args.faithful, "hermite_points": args.hermite_points}
 
 
 class CombinedCallback:
@@ -1849,7 +1866,7 @@ def write_evaluation_report(
     return report_path
 
 
-def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True):
+def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True, faithful=False, hermite_points=5):
     config = _coerce_experiment_config(config)
     definition = system_definition(config)
     params = config.system.params
@@ -1960,6 +1977,13 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
             metrics["decoherence_correction"] = correction_problem.value(evaluated_pulse)
         finally:
             correction_problem.shutdown()
+    if faithful:
+        metrics["faithful_gate_fidelity"] = faithful_gate_fidelity(
+            open_system,
+            evaluated_pulse,
+            state_pairs,
+            hermite_points=hermite_points,
+        )
     outputs = {
         "config_snapshot": config_snapshot_path,
         "evaluated_pulse_npz": pulse_npz_path,
@@ -2003,7 +2027,8 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "evaluate":
-        evaluate_pulse(parse_evaluate_args(sys.argv[2:]))
+        config, evaluate_options = parse_evaluate_args(sys.argv[2:])
+        evaluate_pulse(config, **evaluate_options)
     else:
         run_perturbative_experiment(parse_args())
 
