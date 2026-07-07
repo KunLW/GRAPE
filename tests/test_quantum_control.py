@@ -57,6 +57,7 @@ from physical_systems.spin_boson import (
 )
 from quantum_control import (
     ClosedSystem,
+    CombinedStateAverageProblem,
     ControlProblem,
     DecoherenceChannel,
     EvolutionContext,
@@ -88,6 +89,7 @@ from quantum_control import (
     two_qubit_logical_test_states,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.diagnostics.error_budget import (
     ErrorBudgetConfig,
     evaluate_error_budget,
@@ -1060,6 +1062,77 @@ def test_noisy_gate_fidelity_includes_decoherence_correction():
     )
 
     assert with_decoherence < without
+
+
+def test_open_grape_optimization_improves_noisy_gate_fidelity():
+    """Open-system GRAPE end-to-end: optimize the combined objective
+    (fluctuation expansion + Lindblad correction) on an ``OpenSystem`` built
+    from declarative noise terms, and verify against ``noisy_gate_fidelity``.
+    """
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)
+    system = OpenSystem(
+        drift=np.zeros((2, 2), dtype=complex),
+        controls=[sx],
+        noise_terms=[
+            FluctuationTerm(
+                name="dephasing", operator=sz, definition="sigma_z",
+                coefficient=0.01, kind="static",
+            ),
+            DecoherenceChannel(
+                name="decay", operator=sigma_minus, definition="sigma_minus",
+                rate=0.02,
+            ),
+        ],
+    )
+    pulse = PiecewiseConstantPulse(np.full((8, 1), 2.0), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+
+    step_builder = PerturbativeStepBuilder()
+    expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
+    expansion_problem = ExpansionStateAverageFidelity(
+        system=system,
+        pulse=pulse,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=expansion_objective,
+        differentiator=PerturbativeExpansionDifferentiator(step_builder, expansion_objective),
+        state_pairs=state_pairs,
+        normalize_weights=False,
+    )
+    unitary_builder = UnitaryStepBuilder()
+    decoherence_problem = ExpansionStateAverageFidelity(
+        system=system,
+        pulse=pulse,
+        evolution=LindbladExpansionEvolution(
+            unitary_builder, collapse_operators=system.collapse_operators
+        ),
+        objective=LindbladCorrectedStateFidelity(include_closed=False),
+        differentiator=LindbladExpansionDifferentiator(unitary_builder, include_closed=False),
+        state_pairs=state_pairs,
+        normalize_weights=False,
+    )
+    problem = CombinedStateAverageProblem(expansion_problem, decoherence_problem)
+    try:
+        initial = noisy_gate_fidelity(
+            system, pulse, state_pairs, collapse_operators=system.collapse_operators
+        )
+        # The optimizer objective is exactly the reported noisy gate fidelity.
+        assert np.allclose(problem.value(pulse), initial)
+
+        optimizer = ScipyOptimizer(method="L-BFGS-B", maximize=True, options={"maxiter": 40})
+        result = optimizer.optimize(problem)
+        final_pulse = result.optimized_pulse
+        final = noisy_gate_fidelity(
+            system, final_pulse, state_pairs, collapse_operators=system.collapse_operators
+        )
+    finally:
+        problem.shutdown()
+
+    assert final > initial
+    assert final > 0.95
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():

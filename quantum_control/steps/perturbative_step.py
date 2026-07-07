@@ -38,7 +38,7 @@ class PerturbativeStepBuilder(UnitaryStepBuilder):
 
     def build_step(self, system, controls, dt, t=None):
         unitary_step = super().build_step(system, controls, dt, t=t)
-        fluctuation_h = system.fluctuation_hamiltonian(controls, t=t)
+        fluctuation_h = _fluctuation_hamiltonian(system, controls, unitary_step.W, t=t)
         if self.V_method == "leading":
             V = -1j * dt * fluctuation_h @ unitary_step.W
         elif self.V_method == "frechet":
@@ -67,14 +67,16 @@ class PerturbativeStepBuilder(UnitaryStepBuilder):
             )
             return PerturbativeStep(W=dW, V=dV)
 
-        dfluc_h = system.fluctuation_control_derivative(
+        dfluc_h = _fluctuation_control_derivative(
+            system,
             control_index,
+            step.W,
             controls=controls,
             t=t,
         )
         dV = -1j * dt * dfluc_h @ step.W
         if self.dV_method == "include_dW":
-            fluctuation_h = system.fluctuation_hamiltonian(controls, t=t)
+            fluctuation_h = _fluctuation_hamiltonian(system, controls, step.W, t=t)
             dV = dV + -1j * dt * fluctuation_h @ dW
         elif self.dV_method != "leading":
             raise ValueError("dV_method must be 'include_dW' or 'leading'.")
@@ -89,3 +91,19 @@ class PerturbativeStepBuilder(UnitaryStepBuilder):
         plus_step = self.build_step(system, plus, dt, t=t)
         minus_step = self.build_step(system, minus, dt, t=t)
         return (plus_step.V - minus_step.V) / (2.0 * epsilon)
+
+
+def _fluctuation_hamiltonian(system, controls, like, t=None):
+    """H_fluctuation, or zero for systems without a noise model (ClosedSystem)."""
+    method = getattr(system, "fluctuation_hamiltonian", None)
+    if method is None:
+        return np.zeros_like(like)
+    return method(controls, t=t)
+
+
+def _fluctuation_control_derivative(system, control_index, like, controls=None, t=None):
+    """dH_fluctuation/d(control), or zero for systems without a noise model."""
+    method = getattr(system, "fluctuation_control_derivative", None)
+    if method is None:
+        return np.zeros_like(like)
+    return method(control_index, controls=controls, t=t)
