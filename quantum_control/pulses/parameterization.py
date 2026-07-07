@@ -103,7 +103,9 @@ class MaskedPulseParameterization:
             self.parameter_shape
         )
 
-    def parameter_bounds(self):
+    def parameter_bounds(self, shape=None):
+        """Flat parameter bounds; ``shape`` is accepted for interface
+        uniformity and ignored (the mask fixes the parameter shape)."""
         return self.base.parameter_bounds(self.parameter_shape)
 
     def _free_bounds(self):

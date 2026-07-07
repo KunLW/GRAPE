@@ -9,7 +9,7 @@ from quantum_control.evolution.nominal_evolution import NominalUnitaryEvolution
 from quantum_control.objectives.expansion_fidelity import ExpansionFidelity
 from quantum_control.objectives.lindblad_fidelity import LindbladCorrectedStateFidelity
 from quantum_control.objectives.state_fidelity import StateTransferFidelity
-from quantum_control.problems.state_average import ExpansionStateAverageFidelity
+from quantum_control.problems.state_average import StateAverageProblem
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
 from quantum_control.steps.unitary_step import UnitaryStepBuilder
 
@@ -52,7 +52,7 @@ def noisy_gate_fidelity(system, pulse, state_pairs, collapse_operators=(), n_wor
     state_pairs = tuple(state_pairs)
     step_builder = PerturbativeStepBuilder()
     objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
-    averaged = ExpansionStateAverageFidelity(
+    with StateAverageProblem(
         system=system,
         pulse=pulse,
         evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
@@ -61,15 +61,12 @@ def noisy_gate_fidelity(system, pulse, state_pairs, collapse_operators=(), n_wor
         state_pairs=state_pairs,
         normalize_weights=False,
         n_workers=n_workers,
-    )
-    try:
+    ) as averaged:
         fidelity = averaged.value()
-    finally:
-        averaged.shutdown()
 
     collapse_operators = tuple(collapse_operators)
     if collapse_operators:
-        correction = ExpansionStateAverageFidelity(
+        with StateAverageProblem(
             system=system,
             pulse=pulse,
             evolution=LindbladExpansionEvolution(
@@ -81,9 +78,6 @@ def noisy_gate_fidelity(system, pulse, state_pairs, collapse_operators=(), n_wor
             state_pairs=state_pairs,
             normalize_weights=False,
             n_workers=n_workers,
-        )
-        try:
+        ) as correction:
             fidelity += correction.value()
-        finally:
-            correction.shutdown()
     return fidelity

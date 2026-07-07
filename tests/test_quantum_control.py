@@ -43,13 +43,13 @@ from physical_systems.spin_boson import (
 )
 from quantum_control import (
     ClosedSystem,
-    CombinedStateAverageProblem,
+    SumProblem,
     ControlProblem,
     faithful_gate_fidelity,
     DecoherenceChannel,
     EvolutionContext,
     ExpansionFidelity,
-    ExpansionStateAverageFidelity,
+    StateAverageProblem,
     GrapeDifferentiator,
     FluctuationTerm,
     LindbladCorrectedStateFidelity,
@@ -622,7 +622,7 @@ def test_open_grape_optimization_improves_noisy_gate_fidelity():
 
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
-    expansion_problem = ExpansionStateAverageFidelity(
+    expansion_problem = StateAverageProblem(
         system=system,
         pulse=pulse,
         evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
@@ -632,7 +632,7 @@ def test_open_grape_optimization_improves_noisy_gate_fidelity():
         normalize_weights=False,
     )
     unitary_builder = UnitaryStepBuilder()
-    decoherence_problem = ExpansionStateAverageFidelity(
+    decoherence_problem = StateAverageProblem(
         system=system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(
@@ -643,8 +643,7 @@ def test_open_grape_optimization_improves_noisy_gate_fidelity():
         state_pairs=state_pairs,
         normalize_weights=False,
     )
-    problem = CombinedStateAverageProblem(expansion_problem, decoherence_problem)
-    try:
+    with SumProblem(expansion_problem, decoherence_problem) as problem:
         initial = noisy_gate_fidelity(
             system, pulse, state_pairs, collapse_operators=system.collapse_operators
         )
@@ -657,8 +656,6 @@ def test_open_grape_optimization_improves_noisy_gate_fidelity():
         final = noisy_gate_fidelity(
             system, final_pulse, state_pairs, collapse_operators=system.collapse_operators
         )
-    finally:
-        problem.shutdown()
 
     assert final > initial
     assert final > 0.95
@@ -746,6 +743,47 @@ def test_faithful_gate_fidelity_matches_perturbative_for_small_fluctuations():
     # quadrature is converged: more nodes do not move the value
     refined = faithful_gate_fidelity(system, fine_pulse, state_pairs, hermite_points=15)
     assert np.allclose(faithful, refined, atol=1e-9)
+
+
+def test_value_and_gradient_matches_separate_calls_bitwise(tmp_path):
+    """The fused evaluation must be numerically identical to separate calls
+    through the full driver stack (SumProblem -> parameterized -> penalized),
+    so switching the optimizer to jac=True cannot change any trajectory."""
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 2",
+                "  noise:",
+                "    decoherence:",
+                "      enabled: true",
+                "      gamma_heating: 0.5",
+                "pulse:",
+                "  n_steps: 4",
+                "  random_seed: 7",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    _system, open_system = sbo.build_systems(config)
+    initial_pulse = sbo.build_initial_pulse(config)
+    parameterization = sbo.build_parameterization(config, initial_pulse)
+    state_pairs = sbo.build_state_pairs(config)
+    with sbo.build_objective_problem(config, open_system, initial_pulse, state_pairs) as problem:
+        assert isinstance(problem, SumProblem)
+        penalized = PenalizedParameterizedProblem(
+            ParameterizedControlProblem(problem, parameterization),
+            ParameterSmoothPenalty(l1_weight=5e-4, l2_weight=1e-4),
+        )
+        parameters = penalized.initial_parameters().reshape(-1)
+
+        fused_value, fused_gradient = penalized.value_and_gradient(parameters)
+
+        assert fused_value == penalized.value(parameters)
+        assert np.array_equal(fused_gradient, penalized.gradient(parameters))
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
@@ -1164,7 +1202,7 @@ def test_perturbative_v_method_frechet_is_finite_for_noncommuting_case():
 def test_state_average_fidelity_matches_single_state_problem_for_one_pair():
     amplitudes = np.array([[0.2], [0.25], [0.15]])
     problem = two_level_problem(amplitudes)
-    averaged = ExpansionStateAverageFidelity(
+    averaged = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1292,7 +1330,7 @@ def test_state_average_fidelity_uses_weighted_value_and_gradient_average():
     target_zero = np.array([1.0, 0.0], dtype=complex)
     problem_one = two_level_problem(amplitudes, initial_state=initial, target_state=target_one)
     problem_zero = two_level_problem(amplitudes, initial_state=initial, target_state=target_zero)
-    averaged = ExpansionStateAverageFidelity(
+    averaged = StateAverageProblem(
         system=problem_one.system,
         pulse=problem_one.pulse,
         evolution=problem_one.evolution,
@@ -1321,7 +1359,7 @@ def test_state_average_fidelity_parallel_matches_serial_value_and_gradient():
         (initial, target_one, 2.0),
         (initial, target_zero, 1.0),
     ]
-    serial = ExpansionStateAverageFidelity(
+    serial = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1329,7 +1367,7 @@ def test_state_average_fidelity_parallel_matches_serial_value_and_gradient():
         differentiator=problem.differentiator,
         state_pairs=state_pairs,
     )
-    parallel = ExpansionStateAverageFidelity(
+    parallel = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1350,7 +1388,7 @@ def test_state_average_fidelity_requires_positive_worker_count():
     problem = two_level_problem(np.array([[0.2], [0.25], [0.15]]))
 
     try:
-        ExpansionStateAverageFidelity(
+        StateAverageProblem(
             system=problem.system,
             pulse=problem.pulse,
             evolution=problem.evolution,
@@ -1718,7 +1756,7 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
             np.eye(dimension, dtype=complex)[2 * n_levels],
         ),
     ]
-    problem = ExpansionStateAverageFidelity(
+    problem = StateAverageProblem(
         system=system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(step_builder),

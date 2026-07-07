@@ -3,6 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 
+def _value_and_gradient(problem, argument):
+    """Fused evaluation when the problem supports it, separate calls otherwise."""
+    if hasattr(problem, "value_and_gradient"):
+        return problem.value_and_gradient(argument)
+    return problem.value(argument), problem.gradient(argument)
+
+
 class AdamOptimizer:
     def __init__(self, learning_rate=1e-2, beta1=0.9, beta2=0.999, epsilon=1e-8, steps=100):
         self.learning_rate = learning_rate
@@ -12,7 +19,9 @@ class AdamOptimizer:
         self.steps = steps
 
     def optimize(self, problem, initial_pulse=None):
-        pulse = initial_pulse or problem.pulse
+        if initial_pulse is None:
+            initial_pulse = problem.pulse
+        pulse = initial_pulse
         amplitudes = np.array(pulse.amplitudes, copy=True)
         first_moment = np.zeros_like(amplitudes)
         second_moment = np.zeros_like(amplitudes)
@@ -20,8 +29,7 @@ class AdamOptimizer:
 
         for iteration in range(1, self.steps + 1):
             trial_pulse = pulse.with_amplitudes(amplitudes)
-            value = problem.value(trial_pulse)
-            gradient = problem.gradient(trial_pulse)
+            value, gradient = _value_and_gradient(problem, trial_pulse)
             first_moment = self.beta1 * first_moment + (1.0 - self.beta1) * gradient
             second_moment = self.beta2 * second_moment + (1.0 - self.beta2) * gradient**2
             m_hat = first_moment / (1.0 - self.beta1**iteration)
@@ -45,8 +53,8 @@ class AdamOptimizer:
         history = []
 
         for iteration in range(1, self.steps + 1):
-            value = problem.value(parameters)
-            gradient = problem.gradient(parameters).reshape(-1)
+            value, gradient = _value_and_gradient(problem, parameters)
+            gradient = np.asarray(gradient).reshape(-1)
             first_moment = self.beta1 * first_moment + (1.0 - self.beta1) * gradient
             second_moment = self.beta2 * second_moment + (1.0 - self.beta2) * gradient**2
             m_hat = first_moment / (1.0 - self.beta1**iteration)

@@ -8,8 +8,8 @@ from quantum_control.problems.parameterized_problem import ParameterizedControlP
 from quantum_control.problems.penalties import ParameterSmoothPenalty, PenalizedParameterizedProblem
 from quantum_control.problems.problem import ControlProblem
 from quantum_control.problems.state_average import (
-    CombinedStateAverageProblem,
-    ExpansionStateAverageFidelity,
+    SumProblem,
+    StateAverageProblem,
     StatePair,
 )
 from quantum_control.pulses.constraints import PulseConstraints
@@ -52,14 +52,14 @@ from quantum_control.diagnostics.error_budget import (
 __all__ = [
     "BoundedAmplitudeParameterization",
     "ClosedSystem",
-    "CombinedStateAverageProblem",
+    "SumProblem",
     "ControlProblem",
     "DecoherenceChannel",
     "ErrorBudgetConfig",
     "ErrorBudgetReport",
     "EvolutionContext",
     "ExpansionFidelity",
-    "ExpansionStateAverageFidelity",
+    "StateAverageProblem",
     "FluctuationTerm",
     "GrapeDifferentiator",
     "LindbladCorrectedStateFidelity",

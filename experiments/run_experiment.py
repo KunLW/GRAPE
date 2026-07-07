@@ -28,10 +28,10 @@ from experiments.reporting import (
     timestamped_experiment_dir,
 )
 from quantum_control import (
-    CombinedStateAverageProblem,
+    SumProblem,
     faithful_gate_fidelity,
     ExpansionFidelity,
-    ExpansionStateAverageFidelity,
+    StateAverageProblem,
     EvolutionContext,
     LindbladCorrectedStateFidelity,
     LindbladExpansionDifferentiator,
@@ -1261,7 +1261,7 @@ def build_decoherence_correction_problem(
     n_workers=None,
 ):
     step_builder = UnitaryStepBuilder()
-    return ExpansionStateAverageFidelity(
+    return StateAverageProblem(
         system=open_system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(
@@ -1285,7 +1285,7 @@ def build_objective_problem(config, open_system, initial_pulse, state_pairs):
         max_order=config.objective.max_order,
         drop_odd_average=config.objective.drop_odd_average,
     )
-    expansion_problem = ExpansionStateAverageFidelity(
+    expansion_problem = StateAverageProblem(
         system=open_system,
         pulse=initial_pulse,
         evolution=PerturbativeExpansionEvolution(
@@ -1312,7 +1312,7 @@ def build_objective_problem(config, open_system, initial_pulse, state_pairs):
         collapse_operators,
         include_closed=False,
     )
-    return CombinedStateAverageProblem(expansion_problem, decoherence_problem)
+    return SumProblem(expansion_problem, decoherence_problem)
 
 
 def build_optimizer(config):
@@ -1450,7 +1450,7 @@ def run_perturbative_experiment(
     def decoherence_correction(pulse):
         if not collapse_operators:
             return 0.0
-        correction_problem = build_decoherence_correction_problem(
+        with build_decoherence_correction_problem(
             config,
             open_system,
             pulse,
@@ -1458,11 +1458,8 @@ def run_perturbative_experiment(
             collapse_operators,
             include_closed=False,
             n_workers=1,
-        )
-        try:
+        ) as correction_problem:
             return correction_problem.value(pulse)
-        finally:
-            correction_problem.shutdown()
 
     if collapse_operators:
         initial_preview_metrics.append(
@@ -1964,7 +1961,7 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         "noisy_gate_fidelity": noisy_fidelity,
     }
     if collapse_operators:
-        correction_problem = build_decoherence_correction_problem(
+        with build_decoherence_correction_problem(
             config,
             open_system,
             evaluated_pulse,
@@ -1972,11 +1969,8 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
             collapse_operators,
             include_closed=False,
             n_workers=1,
-        )
-        try:
+        ) as correction_problem:
             metrics["decoherence_correction"] = correction_problem.value(evaluated_pulse)
-        finally:
-            correction_problem.shutdown()
     if faithful:
         metrics["faithful_gate_fidelity"] = faithful_gate_fidelity(
             open_system,

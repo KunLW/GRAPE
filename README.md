@@ -116,15 +116,15 @@ optimizes each of them.
 
 ## Averaging Multiple State Pairs
 
-`ExpansionStateAverageFidelity` evaluates the same perturbative objective over
+`StateAverageProblem` evaluates the same perturbative objective over
 multiple state pairs and returns the weighted average. This matches the
 state-pair averaging used by the open-gate fidelity notes while keeping each
 individual evolution as a single-state propagation.
 
 ```python
-from quantum_control import ExpansionStateAverageFidelity
+from quantum_control import StateAverageProblem
 
-averaged_problem = ExpansionStateAverageFidelity(
+averaged_problem = StateAverageProblem(
     system=system,
     pulse=pulse,
     evolution=evolution,
