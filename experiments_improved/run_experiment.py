@@ -45,7 +45,7 @@ from quantum_control import (
     StateTransferFidelity,
     UnitaryStepBuilder,
     closed_gate_fidelity,
-    open_gate_fidelity,
+    noisy_gate_fidelity,
 )
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
@@ -608,7 +608,7 @@ def plot_population_marginals(
 def format_experiment_note(config, result, metrics):
     return "\n".join(
         [
-            f"objective=open_gate_fidelity_expansion, system={config.system.type}",
+            f"objective=noisy_gate_fidelity_expansion, system={config.system.type}",
             (
                 f"n_steps={config.pulse.n_steps}, maxiter={config.optimizer.maxiter}, "
                 f"workers={config.runtime.workers}"
@@ -618,8 +618,8 @@ def format_experiment_note(config, result, metrics):
                 f"l2={config.penalty.l2_smooth_weight:.6g}"
             ),
             (
-                f"open gate: {metrics['initial_open_gate_fidelity']:.6g} -> "
-                f"{metrics['final_open_gate_fidelity']:.6g}; "
+                f"noisy gate: {metrics['initial_noisy_gate_fidelity']:.6g} -> "
+                f"{metrics['final_noisy_gate_fidelity']:.6g}; "
                 f"close gate: {metrics['initial_close_gate_fidelity']:.6g} -> "
                 f"{metrics['final_close_gate_fidelity']:.6g}"
             ),
@@ -658,7 +658,7 @@ def print_experiment_report(config, result, metrics, outputs):
     print_section(
         "Configuration",
         [
-            ("objective", "open_gate_fidelity_expansion"),
+            ("objective", "noisy_gate_fidelity_expansion"),
             ("system_type", config.system.type),
             *system_params_rows(config.system.params),
             ("include_fluctuations", config.system.noise.fluctuations.enabled),
@@ -684,10 +684,10 @@ def print_experiment_report(config, result, metrics, outputs):
                 ),
             ),
             (
-                "open_gate",
+                "noisy_gate",
                 _transition(
-                    metrics["initial_open_gate_fidelity"],
-                    metrics["final_open_gate_fidelity"],
+                    metrics["initial_noisy_gate_fidelity"],
+                    metrics["final_noisy_gate_fidelity"],
                 ),
             ),
         ]
@@ -794,7 +794,7 @@ def write_optimization_preview_report(
             ("Parameter", "Value"),
             [
                 ("experiment_dir", experiment_dir),
-                ("objective", "open_gate_fidelity_expansion"),
+                ("objective", "noisy_gate_fidelity_expansion"),
                 ("system_type", config.system.type),
                 *system_params_rows(config.system.params),
                 ("n_steps", config.pulse.n_steps),
@@ -880,9 +880,9 @@ def append_optimization_results_report(
                     metrics["final_close_gate_fidelity"],
                 ),
                 _result_row(
-                    "open_gate_fidelity",
-                    metrics["initial_open_gate_fidelity"],
-                    metrics["final_open_gate_fidelity"],
+                    "noisy_gate_fidelity",
+                    metrics["initial_noisy_gate_fidelity"],
+                    metrics["final_noisy_gate_fidelity"],
                 ),
                 _result_row(
                     "decoherence_correction",
@@ -1424,11 +1424,12 @@ def run_perturbative_experiment(
             closed_gate_fidelity(system, masked_initial_pulse, state_pairs),
         ),
         (
-            "initial_open_gate_fidelity",
-            open_gate_fidelity(
+            "initial_noisy_gate_fidelity",
+            noisy_gate_fidelity(
                 noisy_system,
                 masked_initial_pulse,
                 state_pairs,
+                collapse_operators=collapse_operators,
                 n_workers=config.runtime.workers,
             ),
         ),
@@ -1490,10 +1491,11 @@ def run_perturbative_experiment(
         step_log.append(
             step=step,
             close_fidelity=closed_gate_fidelity(system, pulse, state_pairs),
-            open_fidelity=open_gate_fidelity(
+            open_fidelity=noisy_gate_fidelity(
                 noisy_system,
                 pulse,
                 state_pairs,
+                collapse_operators=collapse_operators,
                 n_workers=config.runtime.workers,
             ),
             cost_function=penalized_problem.value(parameters),
@@ -1612,16 +1614,18 @@ def run_perturbative_experiment(
         final_pulse,
         state_pairs,
     )
-    initial_open_gate_fidelity = open_gate_fidelity(
+    initial_noisy_gate_fidelity = noisy_gate_fidelity(
         noisy_system,
         masked_initial_pulse,
         state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
-    final_open_gate_fidelity = open_gate_fidelity(
+    final_noisy_gate_fidelity = noisy_gate_fidelity(
         noisy_system,
         final_pulse,
         state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
 
@@ -1677,8 +1681,8 @@ def run_perturbative_experiment(
         **probe_metrics,
         "initial_close_gate_fidelity": initial_close_gate_fidelity,
         "final_close_gate_fidelity": final_close_gate_fidelity,
-        "initial_open_gate_fidelity": initial_open_gate_fidelity,
-        "final_open_gate_fidelity": final_open_gate_fidelity,
+        "initial_noisy_gate_fidelity": initial_noisy_gate_fidelity,
+        "final_noisy_gate_fidelity": final_noisy_gate_fidelity,
         "initial_decoherence_correction": initial_decoherence_correction,
         "final_decoherence_correction": final_decoherence_correction,
         "initial_l1_penalty": initial_l1_penalty,
@@ -1890,11 +1894,13 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     )
 
     state_pairs = build_state_pairs(config)
+    collapse_operators = build_collapse_operators(config)
     close_fidelity = closed_gate_fidelity(system, evaluated_pulse, state_pairs)
-    open_fidelity = open_gate_fidelity(
+    noisy_fidelity = noisy_gate_fidelity(
         noisy_system,
         evaluated_pulse,
         state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
     probe = definition.probe_state_pair(params)
@@ -1947,9 +1953,8 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
     metrics = {
         **({"state_fidelity": state_fidelity} if state_fidelity is not None else {}),
         "close_gate_fidelity": close_fidelity,
-        "open_gate_fidelity": open_fidelity,
+        "noisy_gate_fidelity": noisy_fidelity,
     }
-    collapse_operators = build_collapse_operators(config)
     if collapse_operators:
         correction_problem = build_decoherence_correction_problem(
             config,

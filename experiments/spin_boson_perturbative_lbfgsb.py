@@ -48,7 +48,7 @@ from quantum_control import (
     motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     number_operator,
-    open_gate_fidelity,
+    noisy_gate_fidelity,
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,
@@ -1143,7 +1143,7 @@ def run_perturbative_experiment(
         ),
         (
             "initial_open_gate_fidelity",
-            open_gate_fidelity(
+            noisy_gate_fidelity(
                 noisy_system,
                 masked_initial_pulse,
                 motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
@@ -1200,7 +1200,7 @@ def run_perturbative_experiment(
         step_log.append(
             step=step,
             close_fidelity=closed_gate_fidelity(system, pulse, motion_resolved_gate_state_pairs(target_gate, N_LEVELS)),
-            open_fidelity=open_gate_fidelity(
+            open_fidelity=noisy_gate_fidelity(
                 noisy_system,
                 pulse,
                 motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
@@ -1310,13 +1310,13 @@ def run_perturbative_experiment(
         final_pulse,
         motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
     )
-    initial_open_gate_fidelity = open_gate_fidelity(
+    initial_open_gate_fidelity = noisy_gate_fidelity(
         noisy_system,
         masked_initial_pulse,
         motion_resolved_gate_state_pairs(target_gate, N_LEVELS),
         n_workers=args.workers,
     )
-    final_open_gate_fidelity = open_gate_fidelity(
+    final_open_gate_fidelity = noisy_gate_fidelity(
         noisy_system,
         final_pulse,
         motion_resolved_gate_state_pairs(target_gate, N_LEVELS),

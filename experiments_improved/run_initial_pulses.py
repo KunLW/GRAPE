@@ -1,9 +1,9 @@
 """Run every initial-pulse .npz in a directory through the spin-boson experiment.
 
 By default each pulse is *evaluated* (fast: no optimization) and a summary table
-of close/open-gate fidelities is printed, sorted best-first. Pass ``--optimize``
+of close/noisy-gate fidelities is printed, sorted best-first. Pass ``--optimize``
 to instead run the full L-BFGS-B optimization for each pulse and compare the
-initial vs. final open-gate fidelity.
+initial vs. final noisy-gate fidelity.
 
 Usage:
     python experiments_improved/run_initial_pulses.py                 # evaluate all
@@ -57,8 +57,8 @@ def run_all(pulse_dir=DEFAULT_PULSE_DIR, workers=1, optimize=False, maxiter=40):
             rows.append(
                 (
                     pulse_npz.name,
-                    metrics["initial_open_gate_fidelity"],
-                    metrics["final_open_gate_fidelity"],
+                    metrics["initial_noisy_gate_fidelity"],
+                    metrics["final_noisy_gate_fidelity"],
                     result["experiment_dir"].name,
                 )
             )
@@ -69,7 +69,7 @@ def run_all(pulse_dir=DEFAULT_PULSE_DIR, workers=1, optimize=False, maxiter=40):
                 (
                     pulse_npz.name,
                     metrics["close_gate_fidelity"],
-                    metrics["open_gate_fidelity"],
+                    metrics["noisy_gate_fidelity"],
                     result["experiment_dir"].name,
                 )
             )
@@ -80,10 +80,10 @@ def run_all(pulse_dir=DEFAULT_PULSE_DIR, workers=1, optimize=False, maxiter=40):
 
 def _print_summary(rows, optimize):
     if optimize:
-        headers = ("pulse", "initial_open", "final_open", "experiment_dir")
+        headers = ("pulse", "initial_noisy", "final_noisy", "experiment_dir")
         rows = sorted(rows, key=lambda r: r[2], reverse=True)
     else:
-        headers = ("pulse", "close_gate", "open_gate", "experiment_dir")
+        headers = ("pulse", "close_gate", "noisy_gate", "experiment_dir")
         rows = sorted(rows, key=lambda r: r[2], reverse=True)
     name_w = max(len(headers[0]), *(len(r[0]) for r in rows))
     dir_w = max(len(headers[3]), *(len(r[3]) for r in rows))

@@ -2,7 +2,7 @@ from quantum_control.context import EvolutionContext
 from quantum_control.gate_metrics import (
     closed_gate_fidelity,
     ms_xx_pi_over_2_gate,
-    open_gate_fidelity,
+    noisy_gate_fidelity,
     single_qubit_logical_test_states,
     two_qubit_logical_test_states,
 )
@@ -111,8 +111,8 @@ __all__ = [
     "load_pulse_npz",
     "motion_resolved_gate_state_pairs",
     "ms_xx_pi_over_2_gate",
+    "noisy_gate_fidelity",
     "number_operator",
-    "open_gate_fidelity",
     "single_qubit_logical_test_states",
     "spin_boson_collapse_operators",
     "spin_boson_control_system",

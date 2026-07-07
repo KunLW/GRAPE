@@ -72,7 +72,7 @@ from quantum_control import (
     motion_resolved_gate_state_pairs,
     ms_xx_pi_over_2_gate,
     number_operator,
-    open_gate_fidelity,
+    noisy_gate_fidelity,
     single_qubit_logical_test_states,
     spin_boson_collapse_operators,
     spin_boson_control_system,
@@ -1000,7 +1000,7 @@ def test_motion_resolved_gate_state_pairs_use_spin_motion_ordering_and_weights()
     assert np.allclose(first_pair.weight, 1.0 / 16.0)
 
 
-def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
+def test_zero_fluctuation_noisy_gate_fidelity_matches_closed_gate_fidelity():
     n_levels = 2
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
     pulse = PiecewiseConstantPulse(
@@ -1011,9 +1011,32 @@ def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
 
     state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
     closed = closed_gate_fidelity(system, pulse, state_pairs)
-    opened = open_gate_fidelity(system, pulse, state_pairs)
+    noisy = noisy_gate_fidelity(system, pulse, state_pairs)
 
-    assert np.allclose(opened, closed)
+    assert np.allclose(noisy, closed)
+
+
+def test_noisy_gate_fidelity_includes_decoherence_correction():
+    n_levels = 2
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    pulse = PiecewiseConstantPulse(
+        np.array([[0.02, 0.01], [0.025, 0.015]], dtype=float),
+        dt=0.005,
+    )
+    state_pairs = motion_resolved_gate_state_pairs(ms_xx_pi_over_2_gate(), n_levels)
+    collapse_operators = spin_boson_collapse_operators(
+        n_levels=n_levels,
+        gamma_heating=0.5,
+        gamma_motional_dephasing=0.2,
+        gamma_spin_dephasing=0.1,
+    )
+
+    without = noisy_gate_fidelity(system, pulse, state_pairs)
+    with_decoherence = noisy_gate_fidelity(
+        system, pulse, state_pairs, collapse_operators=collapse_operators
+    )
+
+    assert with_decoherence < without
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
