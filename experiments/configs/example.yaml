@@ -1,7 +1,7 @@
-# Example experiment configuration for experiments_improved/run_experiment.py.
+# Example experiment configuration for experiments/run_experiment.py.
 #
 # Run with:
-#   python experiments_improved/run_experiment.py --config experiments_improved/configs/example.yaml
+#   python -m experiments.run_experiment --config experiments/configs/example.yaml
 #
 # Every value below equals the built-in default, so this file doubles as the
 # schema reference. Absent keys keep their defaults; unknown keys raise an
@@ -66,6 +66,5 @@ runtime:
   # initial_pulse_npz: path/to/pulse.npz
 
 output:
-  output_root: experiments_improved/outputs
-  # prefix: my_run              # run dir = <prefix>_<timestamp>; unset -> system name
-                                # (evaluate mode appends _evaluation to the prefix)
+  output_root: experiments/outputs
+  prefix: spin-boson              # run dir = <prefix>_<timestamp>; unset -> system name

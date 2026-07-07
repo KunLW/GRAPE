@@ -47,7 +47,7 @@ Thumbs.db
 
 # Experiment outputs
 experiments/outputs/
-experiments_improved/outputs/
+experiments/outputs_legacy/
 
 # doc
 *.pdf

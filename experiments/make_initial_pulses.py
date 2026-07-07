@@ -11,8 +11,8 @@ with a matching ``dt`` so they load through ``run_experiment.py`` without a
 dt-mismatch warning.
 
 Usage:
-    python experiments_improved/make_initial_pulses.py            # write all pulses
-    python experiments_improved/make_initial_pulses.py --list     # list names only
+    python experiments/make_initial_pulses.py            # write all pulses
+    python experiments/make_initial_pulses.py --list     # list names only
 """
 
 from __future__ import annotations

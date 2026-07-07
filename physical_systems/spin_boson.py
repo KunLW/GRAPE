@@ -161,7 +161,7 @@ def _motion_basis(index, n_levels):
 
 
 # ---------------------------------------------------------------------------
-# System builders (also used directly by the legacy experiments/ scripts)
+# System builders
 # ---------------------------------------------------------------------------
 
 def spin_boson_collapse_operators(
@@ -640,10 +640,10 @@ class SpinBosonDefinition(SystemDefinitionBase):
     def decoherence_channels(self, params, decoherence):
         """The three Lindblad channels of the trapped-ion model.
 
-        Same operators and ordering as ``spin_boson_collapse_operators``
-        (kept above for the legacy scripts); the ``sqrt(gamma)`` scaling
-        lives on ``DecoherenceChannel.matrix`` and the base class drops
-        zero-rate channels.
+        Same operators and ordering as the ``spin_boson_collapse_operators``
+        convenience builder above; the ``sqrt(gamma)`` scaling lives on
+        ``DecoherenceChannel.matrix`` and the base class drops zero-rate
+        channels.
         """
         n_levels = params.n_levels
         spin_identity = np.eye(4, dtype=complex)

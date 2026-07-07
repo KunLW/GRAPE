@@ -76,53 +76,43 @@ gradient = problem.gradient()
 
 ## CLI Usage
 
-Run the perturbative spin-boson open-gate optimizer from the repository root:
+Run the YAML-driven optimizer from the repository root; the physical system is
+selected by `system.type` (see `physical_systems/`):
 
 ```bash
-.venv/bin/python experiments/spin_boson_perturbative_lbfgsb.py \
-  --maxiter 40 \
-  --n-steps 200 \
-  --workers 1
+.venv/bin/python -m experiments.run_experiment \
+  --config experiments/configs/example.yaml
 ```
 
-Each run writes a timestamped directory under `experiments/outputs/`. The
-`report.md` file is created before optimization starts with a preview of the
-configuration, output paths, system construction script, noise terms, and
-`kappa_1`/`kappa_2` diagnostics. When optimization finishes or is interrupted,
-the final results are appended to the same report. Checkpoint files
-`latest_pulse.npz`, `latest_pulse.csv`, and `latest_parameters.npz` are updated
-during optimization.
+Each run writes a `<prefix>_<timestamp>` directory under the configured
+`output.output_root` (default `experiments/outputs/`; `output.prefix` defaults
+to the system name). The `report.md` file is created before optimization
+starts with a preview of the configuration, fluctuation terms, decoherence
+channels, and `kappa_1`/`kappa_2`/`kappa_3` diagnostics. When optimization
+finishes or is interrupted, the final results are appended to the same report.
+Checkpoint files `latest_pulse.npz`, `latest_pulse.csv`, and
+`latest_parameters.npz` are updated during optimization, and the fully
+resolved `config.yaml` snapshot reproduces the run when passed back via
+`--config`.
 
-Useful options:
+Useful flags (each overrides the YAML): `--maxiter`, `--n-steps`,
+`--l1-smooth-weight`, `--l2-smooth-weight`, `--workers`, `--print-step`,
+`--print-fidelity-terms`, `--initial-pulse-npz`, `--no-progress`,
+`--close-grape`, and the spin-boson `--gamma-*` decoherence rates.
 
-```text
---maxiter N                 L-BFGS-B iteration limit.
---n-steps N                 Number of piecewise-constant pulse slices.
---alpha1-cycles X           Initial alpha1 cosine cycles.
---l1-smooth-weight W        First-difference smoothness penalty.
---l2-smooth-weight W        Second-difference smoothness penalty.
---workers N                 Worker processes for state-pair averaging.
---print-step                Print per-step fidelity/objective diagnostics.
---print-fidelity-terms      Print and save perturbative fidelity terms.
---initial-pulse-npz PATH    Start from an exported pulse .npz.
---no-progress               Disable the progress bar.
-```
-
-Run an initial-condition sweep:
+Evaluate an exported pulse without optimizing:
 
 ```bash
-.venv/bin/python experiments/spin_boson_perturbative_initial_sweep.py \
-  --initial-mode all \
-  --n-runs 4 \
-  --seed 12345 \
-  --maxiter 40 \
-  --sweep-workers 2
+.venv/bin/python -m experiments.run_experiment evaluate \
+  --config experiments/configs/example.yaml \
+  --pulse-npz <run_dir>/final_pulse.npz
 ```
 
-`--initial-mode` can be `noise`, `random`, `custom`, `both`, or `all`. Custom
-initial pulses can be supplied by repeating `--initial-pulse-npz PATH`; the
-loaded pulse must match the configured shape and keep the alpha2 endpoints at
-zero.
+`experiments/configs/example.yaml` documents every configuration key;
+`experiments/configs/example2.yaml` shows the deterministic cosine/sine
+initial pulse. Batch tooling: `experiments/make_initial_pulses.py` generates
+starting-pulse families and `experiments/run_initial_pulses.py` evaluates or
+optimizes each of them.
 
 ## Averaging Multiple State Pairs
 

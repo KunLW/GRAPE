@@ -50,7 +50,7 @@ from quantum_control import (
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
-from experiments_improved.config_io import load_experiment_config, write_config_snapshot
+from experiments.config_io import load_experiment_config, write_config_snapshot
 from physical_systems import get_system
 
 N_STEPS = 200

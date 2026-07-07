@@ -1,6 +1,6 @@
 # Adding a physical system: two files
 
-The experiment driver (`experiments_improved/run_experiment.py`) is fully
+The experiment driver (`experiments/run_experiment.py`) is fully
 decoupled from the physical system, and the registry in
 `physical_systems/__init__.py` auto-discovers every module in this folder.
 Adding a system (an NV center, a Rydberg array, ...) therefore means creating
@@ -73,7 +73,7 @@ optimizer:
   maxiter: 10
 ```
 
-Run with `python -m experiments_improved.run_experiment --config my_qubit.yaml`.
+Run with `python -m experiments.run_experiment --config my_qubit.yaml`.
 
 Required hooks: `name`, `default_params()`, `build_closed_system(params)`,
 `control_bounds(params)`, `state_pairs(params)`. The default parameterization
@@ -119,8 +119,7 @@ assembles the `OpenSystem` (closed system + selected terms) with the YAML
   plot, or `None` to skip
 
 See `physical_systems/spin_boson.py` for the full reference implementation
-(all hooks, plus the physics helpers the legacy `experiments/` scripts import
-directly).
+(all hooks, plus standalone physics helpers such as the raw system builders).
 
 ## Invariant
 
@@ -140,13 +139,10 @@ coherent kind is always called "fluctuation" and the Markovian kind
 
 ## Known debt
 
-- `experiments_improved/make_initial_pulses.py` duplicates spin-boson
+- `experiments/make_initial_pulses.py` duplicates spin-boson
   constants (bounds, default total time, alpha2 endpoint convention)
   independently of the system definition; it is a standalone spin-boson
   utility.
 - The CSV export writes converted-unit columns with a `_khz` suffix
   regardless of the channel's display unit (the conversion factor itself is
   taken from `control_channels`).
-- The legacy `experiments/` scripts keep their internal pre-convention
-  vocabulary (e.g. local `noise_specs` helpers meaning fluctuation specs) for
-  output comparability.
