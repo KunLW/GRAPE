@@ -2214,6 +2214,37 @@ def test_yaml_config_physics_knobs_reach_system(tmp_path):
     np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
 
 
+def test_yaml_config_cosine_initial_pulse_shape(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 2",
+                "    initial_pulse_shape: cosine",
+                "    alpha1_cycles: 2.0",
+                "pulse:",
+                "  n_steps: 16",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    pulse = sbo.build_initial_pulse(config)
+    expected = spin_boson_initial_pulse(
+        n_steps=16,
+        total_time_us=config.pulse.total_time_us,
+        alpha1_cycles=2.0,
+    )
+    np.testing.assert_allclose(pulse.amplitudes, expected.amplitudes)
+
+    bad = _yaml_config_file(tmp_path, "system:\n  params:\n    initial_pulse_shape: triangle\n")
+    bad_config = sbo.parse_args(["--config", str(bad)])
+    with _pytest.raises(ValueError, match="cosine"):
+        sbo.build_initial_pulse(bad_config)
+
+
 def test_yaml_config_enabled_flags(tmp_path):
     path = _yaml_config_file(
         tmp_path,

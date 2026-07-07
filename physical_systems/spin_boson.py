@@ -386,12 +386,20 @@ class SpinBosonParams:
         alpha1_khz_bounds: ``(lower, upper)`` amplitude bounds for the
             ``alpha1`` control, in kHz (converted to rad/s internally).
         alpha2_khz_bounds: Same for the ``alpha2`` control.
+        initial_pulse_shape: ``"random"`` (default) or ``"cosine"``. The
+            random shape starts ``alpha1`` near the upper bound with Gaussian
+            per-step noise and ``alpha2`` flat at its upper bound; the cosine
+            shape is the deterministic ``spin_boson_initial_pulse`` —
+            ``alpha1`` a cosine around an offset midpoint and ``alpha2`` a
+            ``sin(pi * t)`` arch.
+        alpha1_cycles: Number of ``alpha1`` cosine cycles across the pulse
+            (cosine shape only).
         alpha1_offset_fraction: Offset of the initial ``alpha1`` guess from
             the bounds midpoint, as a fraction of the bounds half-width
-            (0.7 biases the start toward the upper bound).
+            (0.7 biases the start toward the upper bound; random shape only).
         alpha1_noise_fraction: Standard deviation of the Gaussian noise added
             to the initial ``alpha1`` guess, as a fraction of the bounds
-            half-width.
+            half-width (random shape only).
     """
 
     n_levels: int = 6
@@ -401,6 +409,8 @@ class SpinBosonParams:
     target_gate: str = "ms_xx_pi_over_2"
     alpha1_khz_bounds: tuple[float, float] = DEFAULT_ALPHA1_KHZ_BOUNDS
     alpha2_khz_bounds: tuple[float, float] = DEFAULT_ALPHA2_KHZ_BOUNDS
+    initial_pulse_shape: str = "random"
+    alpha1_cycles: float = 1.0
     alpha1_offset_fraction: float = 0.7
     alpha1_noise_fraction: float = 0.3
 
@@ -670,14 +680,34 @@ class SpinBosonDefinition(SystemDefinitionBase):
     def build_initial_pulse(self, params, pulse_config):
         """Construct the initial pulse guess from the ``pulse`` config section.
 
-        ``alpha1`` starts at the bounds midpoint shifted by
-        ``alpha1_offset_fraction`` of the half-width, plus per-step Gaussian
-        noise of ``alpha1_noise_fraction`` half-widths (reproducible when
-        ``pulse_config.random_seed`` is set), clipped back into bounds.
-        ``alpha2`` starts flat at its upper bound; the endpoint-zero
-        constraint is applied later by the parameterization, not here.
+        ``params.initial_pulse_shape`` selects the guess:
+
+        - ``"random"``: ``alpha1`` starts at the bounds midpoint shifted by
+          ``alpha1_offset_fraction`` of the half-width, plus per-step Gaussian
+          noise of ``alpha1_noise_fraction`` half-widths (reproducible when
+          ``pulse_config.random_seed`` is set), clipped back into bounds;
+          ``alpha2`` starts flat at its upper bound.
+        - ``"cosine"``: the deterministic ``spin_boson_initial_pulse`` shape —
+          ``alpha1`` a cosine of ``alpha1_cycles`` cycles around an offset
+          midpoint and ``alpha2`` a full ``sin(pi * t)`` arch.
+
+        Either way the endpoint-zero constraint is applied later by the
+        parameterization, not here.
         """
         n_steps, dt = validate_pulse_config(pulse_config)
+        if params.initial_pulse_shape == "cosine":
+            return spin_boson_initial_pulse(
+                n_steps=n_steps,
+                total_time_us=float(pulse_config.total_time_us),
+                alpha1_khz_bounds=params.alpha1_khz_bounds,
+                alpha2_khz_bounds=params.alpha2_khz_bounds,
+                alpha1_cycles=params.alpha1_cycles,
+            )
+        if params.initial_pulse_shape != "random":
+            raise ValueError(
+                f"initial_pulse_shape must be 'random' or 'cosine', "
+                f"got {params.initial_pulse_shape!r}."
+            )
         (alpha1_lower, _), (alpha1_upper, alpha2_upper) = self.control_bounds(params)
 
         alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)

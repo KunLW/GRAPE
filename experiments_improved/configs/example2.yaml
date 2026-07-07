@@ -1,0 +1,24 @@
+# Spin-boson optimization starting from the deterministic cosine/sine pulse
+# instead of the default randomized guess.
+#
+# Run with:
+#   python -m experiments_improved.run_experiment --config experiments_improved/configs/example2.yaml
+#
+# The cosine shape (normalized time t in [0, 1]):
+#   alpha1(t) = center + 0.7*half_width + 0.3*half_width * cos(2*pi*alpha1_cycles*t)
+#   alpha2(t) = lower + (upper - lower) * sin(pi*t)
+# It is fully deterministic, so runs reproduce without a random_seed. All keys
+# not listed here keep the defaults documented in example.yaml.
+
+system:
+  type: spin_boson
+  params:
+    initial_pulse_shape: cosine # the cosine/sine initial pulse
+    alpha1_cycles: 1.0          # one full alpha1 cosine cycle over the pulse
+
+pulse:
+  n_steps: 200
+  total_time_us: 225.8
+
+optimizer:
+  maxiter: 40
