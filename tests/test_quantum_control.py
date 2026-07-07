@@ -2037,7 +2037,7 @@ from experiments_improved.config_io import (
     load_experiment_config,
     write_config_snapshot,
 )
-from experiments_improved.systems import get_system
+from experiments_improved.system_definitions import get_system
 from experiments_improved import run_experiment as sbo
 
 

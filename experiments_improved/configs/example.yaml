@@ -10,13 +10,13 @@
 # be passed back via --config to reproduce the run.
 
 system:
-  type: spin_boson              # registry key; see experiments_improved/systems/
+  type: spin_boson              # registry key; see experiments_improved/system_definitions/
   params:
     n_levels: 6                 # motional Fock-space truncation
     phi_s: 0.0                  # spin phase of the drive (rad)
     eta: 0.075                  # Lamb-Dicke factor
     mode_vector: [0.5, -0.5]    # stretch mode; use [0.5, 0.5] for COM
-    target_gate: ms_xx_pi_over_2  # registry name (systems/spin_boson.py TARGET_GATES)
+    target_gate: ms_xx_pi_over_2  # registry name (system_definitions/spin_boson.py TARGET_GATES)
     alpha1_khz_bounds: [1.0, 60.0]   # control-amplitude bounds (kHz)
     alpha2_khz_bounds: [0.0, 200.0]
     alpha1_offset_fraction: 0.7 # initial pulse: alpha1 = center + offset*scale + noise*scale*randn

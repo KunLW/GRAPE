@@ -17,14 +17,20 @@ objects from them. A system definition is any object providing:
 - presentation hooks ``control_channels`` / ``population_structure`` /
   ``probe_state_pair`` (optional; the driver skips what is absent)
 
-In practice, subclass ``SystemDefinitionBase`` from ``systems/common.py``,
+In practice, subclass ``SystemDefinitionBase`` from ``system_definitions/common.py``,
 which implements everything generic from a handful of physics hooks.
 
 Invariant: the driver and quantum_control core never import concrete system
 modules; all system specifics flow through this registry.
 
-See ``systems/README.md`` for a walkthrough of adding a new system
-(e.g. an NV center or a Rydberg array) and ``systems/spin_boson.py`` for the
+Not to be confused with ``quantum_control/systems/``: that package holds the
+reusable physics library (System classes, Hamiltonian/operator builders such
+as ``spin_boson_control_system``) consumed by both the legacy ``experiments/``
+scripts and the definitions here. This package holds the driver-facing
+adapters that assemble those library pieces per the YAML config.
+
+See ``system_definitions/README.md`` for a walkthrough of adding a new system
+(e.g. an NV center or a Rydberg array) and ``system_definitions/spin_boson.py`` for the
 reference implementation.
 """
 
@@ -51,6 +57,6 @@ def get_system(name):
         ) from None
 
 
-from experiments_improved.systems import spin_boson as _spin_boson  # noqa: E402
+from experiments_improved.system_definitions import spin_boson as _spin_boson  # noqa: E402
 
 register_system(_spin_boson.SpinBosonDefinition())

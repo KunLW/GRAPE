@@ -51,7 +51,7 @@ from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
 from experiments_improved.config_io import load_experiment_config, write_config_snapshot
-from experiments_improved.systems import get_system
+from experiments_improved.system_definitions import get_system
 
 N_STEPS = 200
 MAXITER = 40
@@ -71,7 +71,7 @@ def _default_system_noise():
 class SystemSelection:
     """Pluggable physical system: registry key plus its params/noise configs.
 
-    ``type`` selects the system definition (see ``systems/``); ``params`` and
+    ``type`` selects the system definition (see ``system_definitions/``); ``params`` and
     ``noise`` are that system's frozen dataclasses, so their YAML schema is
     owned by the system module rather than this driver.
     """
@@ -327,7 +327,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Run a config-driven perturbative open-gate optimization; the "
-            "physical system is selected by system.type (see experiments_improved/systems)."
+            "physical system is selected by system.type (see experiments_improved/system_definitions)."
         )
     )
     parser.add_argument(

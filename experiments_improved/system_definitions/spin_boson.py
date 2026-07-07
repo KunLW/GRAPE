@@ -1,8 +1,8 @@
 """Spin-boson (trapped-ion MS gate) system definition for the experiment driver.
 
 Reference implementation of the system-definition interface documented in
-``systems/__init__.py``: the physics hooks of ``SystemDefinitionBase`` (see
-``systems/common.py``) are filled in here, while the generic plumbing —
+``system_definitions/__init__.py``: the physics hooks of ``SystemDefinitionBase`` (see
+``system_definitions/common.py``) are filled in here, while the generic plumbing —
 noise-spec bookkeeping, decoherence gating, presentation defaults — lives in
 the base class. The ``SpinBosonParams`` / ``SpinBosonNoise`` dataclasses
 define the ``system.params`` / ``system.noise`` YAML schema.
@@ -59,7 +59,7 @@ from quantum_control import (
 )
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
-from experiments_improved.systems.common import (
+from experiments_improved.system_definitions.common import (
     ControlChannel,
     DecoherenceChannel,
     DecoherenceConfigBase,

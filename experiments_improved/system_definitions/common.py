@@ -1,12 +1,12 @@
 """Shared plumbing for system definitions.
 
 ``SystemDefinitionBase`` implements the generic half of the system-definition
-interface documented in ``systems/__init__.py`` — noise-spec bookkeeping,
+interface documented in ``system_definitions/__init__.py`` — noise-spec bookkeeping,
 decoherence gating, default parameterization/initial pulse, and presentation
 hooks the driver uses for plots and reports — so a concrete system module
 only supplies physics: operators, Hamiltonians, noise terms, and targets.
-See ``systems/spin_boson.py`` for the reference subclass and
-``systems/README.md`` for the walkthrough.
+See ``system_definitions/spin_boson.py`` for the reference subclass and
+``system_definitions/README.md`` for the walkthrough.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # Adding a physical system
 
 The experiment driver (`run_experiment.py`) is fully decoupled from the
-physical system through the registry in `systems/__init__.py`: metrics,
+physical system through the registry in `system_definitions/__init__.py`: metrics,
 reports, plots, and CSV exports all go through the system definition, so a
 new system needs **no driver changes**. The YAML config selects a system by
 name and supplies its parameters:
@@ -20,6 +20,17 @@ system:
       ...
 ```
 
+## How this differs from `quantum_control/systems/`
+
+- `quantum_control/systems/` is the **physics library**: System classes
+  (`ClosedSystem`, `FluctuatingClosedSystem`, ...) and concrete
+  Hamiltonian/operator builders (e.g. `spin_boson_control_system`). It is
+  used by both the legacy `experiments/` scripts and the definitions here.
+- `experiments_improved/system_definitions/` (this folder) is the **driver
+  adapter layer**: registry + `SystemDefinitionBase` subclasses that assemble
+  library pieces into everything `run_experiment.py` needs, per the YAML
+  config.
+
 ## Invariant
 
 **The driver and quantum_control core must never import concrete system
@@ -32,12 +43,12 @@ exceptions are the driver's default `system.type` and the spin-boson-only
 
 ## Steps (e.g. for an NV center or a Rydberg array)
 
-Subclass `SystemDefinitionBase` from `systems/common.py`; it provides the
+Subclass `SystemDefinitionBase` from `system_definitions/common.py`; it provides the
 generic plumbing (noise-spec bookkeeping, decoherence gating, default
 parameterization/initial pulse, presentation defaults), so the subclass is
 essentially pure physics.
 
-1. Create `systems/my_system.py` with the config dataclasses:
+1. Create `system_definitions/my_system.py` with the config dataclasses:
    - `MySystemParams` — every physics knob (dimensions, couplings, control
      bounds, target specification). Field names and defaults define the
      `system.params` YAML schema, and all fields are echoed generically into
@@ -75,10 +86,10 @@ essentially pure physics.
      - `probe_state_pair(params)` → `StateProbe(initial_state, target_state,
        description)` for the single-state fidelity diagnostic and the
        propagation plot, or `None`
-4. Register it at the bottom of `systems/__init__.py`:
+4. Register it at the bottom of `system_definitions/__init__.py`:
 
    ```python
-   from experiments_improved.systems import my_system as _my_system
+   from experiments_improved.system_definitions import my_system as _my_system
    register_system(_my_system.MySystemDefinition())
    ```
 
@@ -88,7 +99,7 @@ No changes to `config_io.py` or the driver are needed — the YAML sections are
 validated generically against your dataclasses (unknown keys raise, absent
 keys keep defaults), and every report/plot adapts through the hooks above.
 
-See `systems/spin_boson.py` for the reference subclass: it overrides the
+See `system_definitions/spin_boson.py` for the reference subclass: it overrides the
 initial pulse (randomized alpha1 start) and the parameterization (alpha2
 pinned to zero at both endpoints) and provides all three presentation hooks.
 
