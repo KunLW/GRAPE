@@ -56,6 +56,7 @@ from quantum_control.systems import (
 from physical_systems.common import (
     ControlChannel,
     DecoherenceConfigBase,
+    FluctuationsConfigBase,
     PopulationStructure,
     StateProbe,
     SystemDefinitionBase,
@@ -453,16 +454,16 @@ class SpinBosonDecoherence(DecoherenceConfigBase):
 
 
 @dataclass(frozen=True)
-class SpinBosonFluctuations:
+class SpinBosonFluctuations(FluctuationsConfigBase):
     """Coherent fluctuation strengths (``system.noise.fluctuations`` schema).
 
     Each sigma is the standard deviation of a quasi-static (constant over one
     gate) error term; see ``SpinBosonDefinition.fluctuation_terms`` for the
-    operator each one multiplies.
+    operator each one multiplies. The ``enabled`` switch and
+    ``any_sigma_positive`` gating come from ``FluctuationsConfigBase``
+    (enabled by default here, unlike the base).
 
     Attributes:
-        enabled: When false, ``build_systems`` puts no fluctuation terms on
-            the open system.
         sigma_static_spin_dephasing: Collective spin-dephasing offset, in
             rad/s (default 31.4159 = 2*pi*5).
         sigma_static_motional_frequency: Motional-frequency offset multiplying
@@ -472,9 +473,9 @@ class SpinBosonFluctuations:
         sigma_control_alpha2_relative: Same for ``alpha2``.
     """
 
-    enabled: bool = True
-    sigma_static_spin_dephasing: float = 31.4159
-    sigma_static_motional_frequency: float = 30.0
+    enabled: bool = True  # overrides the base default
+    sigma_static_spin_dephasing: float = 314.159
+    sigma_static_motional_frequency: float = 300.0
     sigma_control_alpha1_relative: float = 0.0001
     sigma_control_alpha2_relative: float = 0.0001
 

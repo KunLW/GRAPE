@@ -22,15 +22,36 @@ from quantum_control.pulses.pulse import PiecewiseConstantPulse
 from quantum_control.systems import OpenSystem
 
 
+def _float_fields_by_name(config):
+    """All float fields of ``config`` (everything except ``enabled``) by name."""
+    return {
+        field.name: float(getattr(config, field.name))
+        for field in dataclasses.fields(config)
+        if field.name != "enabled"
+    }
+
+
 @dataclass(frozen=True)
 class FluctuationsConfigBase:
     """Base for ``system.noise.fluctuations`` dataclasses.
 
     Subclasses add their sigma fields; a closed-only system can use this base
-    directly (nothing enabled, no fields).
+    directly (nothing enabled, no fields). ``enabled`` plus the generic
+    ``any_sigma_positive`` gate let the driver skip the more expensive
+    fluctuation-expansion propagation whenever it cannot change the result,
+    mirroring ``DecoherenceConfigBase``.
     """
 
     enabled: bool = False
+
+    @property
+    def sigmas(self):
+        """All float fields (i.e. everything except ``enabled``) by name."""
+        return _float_fields_by_name(self)
+
+    @property
+    def any_sigma_positive(self):
+        return any(sigma > 0.0 for sigma in self.sigmas.values())
 
 
 @dataclass(frozen=True)
@@ -48,11 +69,7 @@ class DecoherenceConfigBase:
     @property
     def rates(self):
         """All float fields (i.e. everything except ``enabled``) by name."""
-        return {
-            field.name: float(getattr(self, field.name))
-            for field in dataclasses.fields(self)
-            if field.name != "enabled"
-        }
+        return _float_fields_by_name(self)
 
     @property
     def any_rate_positive(self):
@@ -178,9 +195,10 @@ class SystemDefinitionBase:
 
         The open system is the closed system plus the noise terms selected by
         the ``noise`` config: fluctuation terms when
-        ``noise.fluctuations.enabled``, positive-rate decoherence channels
-        when ``noise.decoherence.enabled``. With everything disabled the open
-        system carries no terms and evolves identically to the closed one.
+        ``noise.fluctuations.enabled`` and at least one sigma is positive,
+        positive-rate decoherence channels when ``noise.decoherence.enabled``.
+        With everything disabled the open system carries no terms and evolves
+        identically to the closed one.
 
         The closed system must expose ``drift`` and ``controls`` (i.e. be a
         ``ClosedSystem``-shaped dataclass) so the terms can be attached
@@ -188,8 +206,12 @@ class SystemDefinitionBase:
         """
         closed_system = self.build_closed_system(params)
         noise_terms = []
-        if noise.fluctuations.enabled:
-            noise_terms.extend(self.fluctuation_terms(params, noise.fluctuations))
+        fluctuations = noise.fluctuations
+        if fluctuations.enabled and fluctuations.any_sigma_positive:
+            # All-or-nothing, unlike the per-channel decoherence filter below:
+            # control-kind terms align with control channels positionally, so
+            # dropping an individual zero-sigma term would misalign the rest.
+            noise_terms.extend(self.fluctuation_terms(params, fluctuations))
         decoherence = noise.decoherence
         if decoherence.enabled and decoherence.any_rate_positive:
             noise_terms.extend(

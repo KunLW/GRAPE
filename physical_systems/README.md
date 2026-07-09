@@ -84,11 +84,12 @@ initial pulse is flat at the bounds midpoint.
 
 Noise is declared, not wired: override the term hooks and the base class
 assembles the `OpenSystem` (closed system + selected terms) with the YAML
-`enabled`/rate gating applied.
+`enabled`/sigma/rate gating applied.
 
 1. Config dataclasses (only for the noise types you use):
    - `MyFluctuations(FluctuationsConfigBase)` — sigma fields
-     (``system.noise.fluctuations`` schema)
+     (``system.noise.fluctuations`` schema); `enabled` / `any_sigma_positive`
+     inherited
    - `MyDecoherence(DecoherenceConfigBase)` — rate fields, 1/s
      (``system.noise.decoherence`` schema); `enabled` / `any_rate_positive`
      inherited
@@ -97,7 +98,10 @@ assembles the `OpenSystem` (closed system + selected terms) with the YAML
 2. Term hooks (each returns engine-level `NoiseTerm` subtypes):
    - `fluctuation_terms(params, fluctuations)` → list of `FluctuationTerm`
      (`kind="static"` added to H as-is; `kind="control"` scaled by the
-     control amplitude, aligned with control channels positionally)
+     control amplitude, aligned with control channels positionally). Applied
+     all-or-nothing: skipped entirely when every sigma is zero, but an
+     individual zero-sigma term is never dropped, so control terms keep
+     their positional alignment.
    - `decoherence_channels(params, decoherence)` → list of
      `DecoherenceChannel` (the `L = sqrt(gamma) * A` scaling lives on
      `.matrix`; zero-rate channels are dropped). Active channels appear in

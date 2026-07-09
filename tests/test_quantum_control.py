@@ -1941,6 +1941,37 @@ def test_yaml_config_enabled_flags(tmp_path):
     assert len(cli_open_system.collapse_operators) == 1
 
 
+def test_fluctuations_all_zero_sigmas_are_gated_off():
+    definition = get_system("spin_boson")
+    params = definition.default_params()
+    noise = definition.default_noise()
+    zero_sigmas = _dc_replace(
+        noise,
+        fluctuations=_dc_replace(
+            noise.fluctuations,
+            enabled=True,
+            sigma_static_spin_dephasing=0.0,
+            sigma_static_motional_frequency=0.0,
+            sigma_control_alpha1_relative=0.0,
+            sigma_control_alpha2_relative=0.0,
+        ),
+    )
+    assert not zero_sigmas.fluctuations.any_sigma_positive
+    _closed, open_system = definition.build_systems(params, zero_sigmas)
+    assert open_system.noise_terms == ()
+
+    one_sigma = _dc_replace(
+        zero_sigmas,
+        fluctuations=_dc_replace(
+            zero_sigmas.fluctuations, sigma_control_alpha2_relative=0.1
+        ),
+    )
+    _closed, open_system = definition.build_systems(params, one_sigma)
+    # Zero-sigma terms are kept: control-kind terms align with control
+    # channels positionally, so none may be dropped individually.
+    assert len(open_system.fluctuation_terms) == 4
+
+
 def test_yaml_config_unknown_keys_raise(tmp_path):
     path = _yaml_config_file(tmp_path, "system:\n  params:\n    gamma_heat: 1.0\n")
     with _pytest.raises(ValueError, match="gamma_heat"):
