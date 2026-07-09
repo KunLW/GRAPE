@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,12 +28,10 @@ from experiments.reporting import (
     timestamped_experiment_dir,
 )
 from quantum_control import (
-    CombinedStateAverageProblem,
-    DEFAULT_ALPHA1_KHZ_BOUNDS,
-    DEFAULT_ALPHA2_KHZ_BOUNDS,
-    DEFAULT_LAMB_DICKE_ETA,
+    SumProblem,
+    faithful_gate_fidelity,
     ExpansionFidelity,
-    ExpansionStateAverageFidelity,
+    StateAverageProblem,
     EvolutionContext,
     LindbladCorrectedStateFidelity,
     LindbladExpansionDifferentiator,
@@ -47,55 +45,47 @@ from quantum_control import (
     PerturbativeStepBuilder,
     StateTransferFidelity,
     UnitaryStepBuilder,
-    annihilation_operator,
     closed_gate_fidelity,
-    creation_operator,
-    motion_resolved_gate_state_pairs,
-    ms_xx_pi_over_2_gate,
-    number_operator,
-    open_gate_fidelity,
-    spin_boson_collapse_operators,
-    spin_boson_control_system,
-    spin_boson_initial_pulse,
-    spin_boson_parameterization,
-    two_qubit_spin_phase_mode,
+    noisy_gate_fidelity,
 )
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
-N_LEVELS = 6
+from experiments.config_io import load_experiment_config, write_config_snapshot
+from physical_systems import get_system
+
 N_STEPS = 200
 MAXITER = 40
-RAD_S_PER_KHZ = 2.0 * np.pi * 1000.0
 DEFAULT_L1_SMOOTH_WEIGHT = 0.0005
 DEFAULT_L2_SMOOTH_WEIGHT = 0.0001
 
 
-@dataclass(frozen=True)
-class SystemConfig:
-    n_levels: int = N_LEVELS
-    phi_s: float = 0.0
-    eta: float = DEFAULT_LAMB_DICKE_ETA
-    include_fluctuations: bool = True
-    gamma_heating: float = 0.0
-    gamma_motional_dephasing: float = 0.0
-    gamma_spin_dephasing: float = 0.0
+def _default_system_params():
+    return get_system("spin_boson").default_params()
 
-    @property
-    def include_decoherence(self):
-        return (
-            self.gamma_heating > 0.0
-            or self.gamma_motional_dephasing > 0.0
-            or self.gamma_spin_dephasing > 0.0
-        )
+
+def _default_system_noise():
+    return get_system("spin_boson").default_noise()
+
+
+@dataclass(frozen=True)
+class SystemSelection:
+    """Pluggable physical system: registry key plus its params/noise configs.
+
+    ``type`` selects the system definition (see ``physical_systems/``); ``params`` and
+    ``noise`` are that system's frozen dataclasses, so their YAML schema is
+    owned by the system module rather than this driver.
+    """
+
+    type: str = "spin_boson"
+    params: object = field(default_factory=_default_system_params)
+    noise: object = field(default_factory=_default_system_noise)
 
 
 @dataclass(frozen=True)
 class PulseConfig:
     n_steps: int = N_STEPS
     total_time_us: float = 225.8
-    alpha1_khz_bounds: tuple[float, float] = DEFAULT_ALPHA1_KHZ_BOUNDS
-    alpha2_khz_bounds: tuple[float, float] = DEFAULT_ALPHA2_KHZ_BOUNDS
     random_seed: int | None = None
 
 
@@ -144,11 +134,14 @@ class RuntimeConfig:
 @dataclass(frozen=True)
 class OutputConfig:
     output_root: Path = field(default_factory=lambda: OUTPUT_DIR)
+    # Run-directory prefix; None means "use the registered system name"
+    # (config.system.type). Directories are named <prefix>_<timestamp>.
+    prefix: str | None = None
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    system: SystemConfig = field(default_factory=SystemConfig)
+    system: SystemSelection = field(default_factory=SystemSelection)
     pulse: PulseConfig = field(default_factory=PulseConfig)
     objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -205,11 +198,22 @@ def default_experiment_config():
     return ExperimentConfig()
 
 
+def _with_fluctuations_enabled(system_selection, enabled):
+    noise = system_selection.noise
+    return replace(
+        system_selection,
+        noise=replace(
+            noise,
+            fluctuations=replace(noise.fluctuations, enabled=bool(enabled)),
+        ),
+    )
+
+
 def no_fluctuation_experiment_config():
     config = default_experiment_config()
     return replace(
         config,
-        system=replace(config.system, include_fluctuations=False),
+        system=_with_fluctuations_enabled(config.system, False),
     )
 
 
@@ -220,13 +224,31 @@ def _coerce_experiment_config(config):
         return config
 
     defaults = default_experiment_config()
-    return ExperimentConfig(
-        system=replace(
-            defaults.system,
-            include_fluctuations=bool(
-                getattr(config, "include_fluctuations", defaults.system.include_fluctuations)
+    system = defaults.system
+    if hasattr(config, "include_fluctuations"):
+        system = _with_fluctuations_enabled(system, config.include_fluctuations)
+    rate_names = [
+        field_info.name
+        for field_info in fields(system.noise.decoherence)
+        if field_info.name != "enabled"
+    ]
+    gamma_updates = {
+        name: float(getattr(config, name))
+        for name in rate_names
+        if getattr(config, name, 0.0)
+    }
+    if gamma_updates:
+        system = replace(
+            system,
+            noise=replace(
+                system.noise,
+                decoherence=replace(
+                    system.noise.decoherence, enabled=True, **gamma_updates
+                ),
             ),
-        ),
+        )
+    return ExperimentConfig(
+        system=system,
         pulse=replace(
             defaults.pulse,
             n_steps=int(getattr(config, "n_steps", defaults.pulse.n_steps)),
@@ -299,248 +321,197 @@ class OptimizationProgressBar:
         sys.stderr.flush()
 
 
-def basis_state(index, dimension):
-    state = np.zeros(dimension, dtype=complex)
-    state[index] = 1.0
-    return state
-
-
-def ms_bell_target_motion_ground(n_levels):
-    dimension = 4 * n_levels
-    target = np.zeros(dimension, dtype=complex)
-    target[0] = 1.0 / np.sqrt(2.0)
-    target[3 * n_levels] = -1j / np.sqrt(2.0)
-    return target
-
-
-def spin_boson_noisy_control_system(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
-    specs = spin_boson_noise_term_specs(n_levels, phi_s, eta=eta)
-    return spin_boson_control_system(
-        n_levels=n_levels,
-        phi_s=phi_s,
-        eta=eta,
-        static_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "static"],
-        control_fluctuations=[spec["matrix"] for spec in specs if spec["kind"] == "control"],
-    )
-
-
-def spin_boson_noise_term_specs(n_levels, phi_s, eta=DEFAULT_LAMB_DICKE_ETA):
-    spin_identity = np.eye(4, dtype=complex)
-    motion_identity = np.eye(n_levels, dtype=complex)
-    single_identity = np.eye(2, dtype=complex)
-    sz = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
-    sz1_plus_sz2 = np.kron(sz, single_identity) + np.kron(single_identity, sz)
-    number = number_operator(n_levels)
-    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
-    s_phi = two_qubit_spin_phase_mode(phi_s, (0.5, -0.5))
-
-    return [
-        _noise_term_spec(
-            kind="static",
-            name="static[0]",
-            coefficient=314.159 * 0.1,
-            operator=np.kron(0.5 * sz1_plus_sz2, motion_identity),
-            definition="kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="static",
-            name="static[1]",
-            coefficient=300 * 0.1,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="added directly to H_fluctuation",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="control[0]",
-            coefficient=0.0001,
-            operator=np.kron(spin_identity, number),
-            definition="kron(I_spin, number_operator)",
-            usage="alpha1(t) * control[0]",
-        ),
-        _noise_term_spec(
-            kind="control",
-            name="control[1]",
-            coefficient=0.0001,
-            operator=eta * np.kron(s_phi, x1),
-            definition=f"eta * kron(S_phi(mode=(0.5, -0.5)), X1), X1=(a + adag)/2, eta={eta:.12g}",
-            usage="alpha2(t) * control[1]",
-        ),
-    ]
-
-
-def _noise_term_spec(kind, name, coefficient, operator, definition, usage):
-    coefficient = float(coefficient)
-    operator = np.asarray(operator, dtype=complex)
-    return {
-        "kind": kind,
-        "name": name,
-        "coefficient": coefficient,
-        "operator": operator,
-        "definition": definition,
-        "usage": usage,
-        "matrix": coefficient * operator,
-    }
-
-
-class Alpha2EndpointZeroParameterization:
-    def __init__(self, base):
-        self.base = base
-
-    def to_physical(self, normalized):
-        amplitudes = self.base.to_physical(normalized)
-        amplitudes[[0, -1], 1] = 0.0
-        return amplitudes
-
-    def to_parameters(self, amplitudes):
-        parameters = self.base.to_parameters(amplitudes)
-        lower, upper = self.base._bounds_for(amplitudes.shape)
-        parameters[[0, -1], 1] = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
-        return parameters
-
-    def pullback_gradient(self, physical_gradient):
-        gradient = self.base.pullback_gradient(physical_gradient)
-        gradient[[0, -1], 1] = 0.0
-        return gradient
-
-    def parameter_bounds(self, shape):
-        bounds = self.base.parameter_bounds(shape)
-        lower, upper = self.base._bounds_for(shape)
-        endpoint_value = self._normalized_zero(lower[[0, -1], 1], upper[[0, -1], 1])
-        for row, value in zip((0, shape[0] - 1), endpoint_value):
-            bounds[np.ravel_multi_index((row, 1), shape)] = (float(value), float(value))
-        return bounds
-
-    @staticmethod
-    def _normalized_zero(lower, upper):
-        return (0.0 - 0.5 * (upper + lower)) / (0.5 * (upper - lower))
+def _load_base_config(config_path):
+    if config_path is None:
+        return default_experiment_config()
+    return load_experiment_config(config_path, default_experiment_config(), get_system)
 
 
 def parse_args(argv=None):
-    defaults = default_experiment_config()
     parser = argparse.ArgumentParser(
-        description="Run spin-boson perturbative open-gate L-BFGS-B experiment."
-    )
-    parser.add_argument("--maxiter", type=int, default=defaults.optimizer.maxiter)
-    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
-    parser.add_argument(
-        "--l1-smooth-weight",
-        type=float,
-        default=defaults.penalty.l1_smooth_weight,
+        description=(
+            "Run a config-driven perturbative open-gate optimization; the "
+            "physical system is selected by system.type (see physical_systems/)."
+        )
     )
     parser.add_argument(
-        "--l2-smooth-weight",
-        type=float,
-        default=defaults.penalty.l2_smooth_weight,
+        "--config",
+        type=Path,
+        default=None,
+        help="YAML experiment configuration file; explicit flags override it.",
     )
+    suppress = argparse.SUPPRESS
+    parser.add_argument("--maxiter", type=int, default=suppress)
+    parser.add_argument("--n-steps", type=int, default=suppress)
+    parser.add_argument("--l1-smooth-weight", type=float, default=suppress)
+    parser.add_argument("--l2-smooth-weight", type=float, default=suppress)
     parser.add_argument(
         "--workers",
         type=int,
-        default=defaults.runtime.workers,
+        default=suppress,
         help="Number of worker processes for perturbative state-pair averaging.",
     )
     parser.add_argument(
         "--print-step",
         action="store_true",
+        default=suppress,
         help="Print per-step close fidelity, open fidelity, and cost function.",
     )
     parser.add_argument(
         "--print-fidelity-terms",
         action="store_true",
+        default=suppress,
         help="Print and save per-step perturbative fidelity term diagnostics.",
     )
     parser.add_argument(
         "--initial-pulse-npz",
         type=Path,
-        default=None,
+        default=suppress,
         help="Load a custom initial pulse .npz with an amplitudes array.",
     )
     parser.add_argument(
         "--no-progress",
         action="store_true",
+        default=suppress,
         help="Disable the optimization progress bar.",
     )
     parser.add_argument(
         "--close-grape",
         action="store_true",
+        default=suppress,
         help="Run optimization without fluctuation terms.",
     )
     parser.add_argument(
         "--gamma-heating",
         type=float,
-        default=defaults.system.gamma_heating,
-        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†.",
+        default=suppress,
+        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†; implies decoherence enabled.",
     )
     parser.add_argument(
         "--gamma-motional-dephasing",
         type=float,
-        default=defaults.system.gamma_motional_dephasing,
-        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a.",
+        default=suppress,
+        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a; implies decoherence enabled.",
     )
     parser.add_argument(
         "--gamma-spin-dephasing",
         type=float,
-        default=defaults.system.gamma_spin_dephasing,
-        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2.",
+        default=suppress,
+        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2; implies decoherence enabled.",
     )
     args = parser.parse_args(argv)
+    return _apply_cli_overrides(_load_base_config(args.config), args)
+
+
+def _apply_cli_overrides(base, args):
+    def arg(name, fallback):
+        return getattr(args, name, fallback)
+
+    system = base.system
+    gamma_names = ("gamma_heating", "gamma_motional_dephasing", "gamma_spin_dephasing")
+    gamma_updates = {
+        name: float(getattr(args, name)) for name in gamma_names if hasattr(args, name)
+    }
+    if gamma_updates:
+        if system.type != "spin_boson":
+            raise ValueError(
+                "--gamma-* flags apply to the spin_boson system only; "
+                f"config selects system type {system.type!r}."
+            )
+        system = replace(
+            system,
+            noise=replace(
+                system.noise,
+                decoherence=replace(
+                    system.noise.decoherence, enabled=True, **gamma_updates
+                ),
+            ),
+        )
+    if getattr(args, "close_grape", False):
+        system = _with_fluctuations_enabled(system, False)
     return replace(
-        defaults,
-        system=replace(
-            defaults.system,
-            include_fluctuations=not args.close_grape,
-            gamma_heating=args.gamma_heating,
-            gamma_motional_dephasing=args.gamma_motional_dephasing,
-            gamma_spin_dephasing=args.gamma_spin_dephasing,
+        base,
+        system=system,
+        pulse=replace(
+            base.pulse,
+            n_steps=arg("n_steps", base.pulse.n_steps),
         ),
-        pulse=replace(defaults.pulse, n_steps=args.n_steps),
-        optimizer=replace(defaults.optimizer, maxiter=args.maxiter),
+        optimizer=replace(
+            base.optimizer,
+            maxiter=arg("maxiter", base.optimizer.maxiter),
+        ),
         penalty=replace(
-            defaults.penalty,
-            l1_smooth_weight=args.l1_smooth_weight,
-            l2_smooth_weight=args.l2_smooth_weight,
+            base.penalty,
+            l1_smooth_weight=arg("l1_smooth_weight", base.penalty.l1_smooth_weight),
+            l2_smooth_weight=arg("l2_smooth_weight", base.penalty.l2_smooth_weight),
         ),
         runtime=replace(
-            defaults.runtime,
-            workers=args.workers,
-            print_step=args.print_step,
-            print_fidelity_terms=args.print_fidelity_terms,
-            initial_pulse_npz=args.initial_pulse_npz,
-            no_progress=args.no_progress,
+            base.runtime,
+            workers=arg("workers", base.runtime.workers),
+            print_step=arg("print_step", base.runtime.print_step),
+            print_fidelity_terms=arg(
+                "print_fidelity_terms", base.runtime.print_fidelity_terms
+            ),
+            initial_pulse_npz=arg("initial_pulse_npz", base.runtime.initial_pulse_npz),
+            no_progress=arg("no_progress", base.runtime.no_progress),
         ),
     )
 
 
 def parse_evaluate_args(argv=None):
-    defaults = default_experiment_config()
     parser = argparse.ArgumentParser(
-        description="Evaluate a spin-boson pulse without running optimization."
+        description="Evaluate a pulse against the configured system without running optimization."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="YAML experiment configuration file; explicit flags override it.",
     )
     parser.add_argument(
         "--pulse-npz",
         type=Path,
-        default=None,
+        default=argparse.SUPPRESS,
         help="Pulse .npz to evaluate. If omitted, evaluate the configured initial pulse.",
     )
-    parser.add_argument("--n-steps", type=int, default=defaults.pulse.n_steps)
+    parser.add_argument("--n-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--workers",
         type=int,
-        default=defaults.runtime.workers,
+        default=argparse.SUPPRESS,
         help="Number of worker processes for open-gate fidelity.",
     )
+    parser.add_argument(
+        "--faithful",
+        action="store_true",
+        help=(
+            "Also compute faithful_gate_fidelity: exact Lindblad density-matrix "
+            "propagation with Gauss-Hermite averaging over the fluctuations "
+            "(cost grows as hermite_points ** n_fluctuation_terms)."
+        ),
+    )
+    parser.add_argument(
+        "--hermite-points",
+        type=int,
+        default=5,
+        help="Gauss-Hermite nodes per fluctuation dimension for --faithful.",
+    )
     args = parser.parse_args(argv)
-    return replace(
-        defaults,
-        pulse=replace(defaults.pulse, n_steps=args.n_steps),
+    base = _load_base_config(args.config)
+    config = replace(
+        base,
+        pulse=replace(
+            base.pulse,
+            n_steps=getattr(args, "n_steps", base.pulse.n_steps),
+        ),
         runtime=replace(
-            defaults.runtime,
-            workers=args.workers,
-            initial_pulse_npz=args.pulse_npz,
+            base.runtime,
+            workers=getattr(args, "workers", base.runtime.workers),
+            initial_pulse_npz=getattr(args, "pulse_npz", base.runtime.initial_pulse_npz),
             no_progress=True,
         ),
     )
+    return config, {"faithful": args.faithful, "hermite_points": args.hermite_points}
 
 
 class CombinedCallback:
@@ -577,23 +548,29 @@ def add_experiment_note(fig, note):
     )
 
 
-def plot_pulses(time_us, initial_pulse, final_pulse, output_path, note=None):
-    initial_khz = initial_pulse.amplitudes / RAD_S_PER_KHZ
-    final_khz = final_pulse.amplitudes / RAD_S_PER_KHZ
-
-    fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
-    axes[0].plot(time_us, initial_khz[:, 0], label="initial alpha1", linewidth=2)
-    axes[0].plot(time_us, final_khz[:, 0], label="final alpha1", linewidth=2)
-    axes[0].set_ylabel("alpha1 (kHz)")
-    axes[0].legend(loc="best")
-    axes[0].grid(True, alpha=0.3)
-
-    axes[1].plot(time_us, initial_khz[:, 1], label="initial alpha2", linewidth=2)
-    axes[1].plot(time_us, final_khz[:, 1], label="final alpha2", linewidth=2)
-    axes[1].set_xlabel("time (us)")
-    axes[1].set_ylabel("alpha2 (kHz)")
-    axes[1].legend(loc="best")
-    axes[1].grid(True, alpha=0.3)
+def plot_pulses(time_us, initial_pulse, final_pulse, channels, output_path, note=None):
+    n_channels = len(channels)
+    fig, axes = plt.subplots(
+        n_channels, 1, figsize=(9, 3 * n_channels), sharex=True, squeeze=False
+    )
+    for index, channel in enumerate(channels):
+        axis = axes[index, 0]
+        axis.plot(
+            time_us,
+            initial_pulse.amplitudes[:, index] * channel.display_scale,
+            label=f"initial {channel.label}",
+            linewidth=2,
+        )
+        axis.plot(
+            time_us,
+            final_pulse.amplitudes[:, index] * channel.display_scale,
+            label=f"final {channel.label}",
+            linewidth=2,
+        )
+        axis.set_ylabel(f"{channel.label} ({channel.display_unit})")
+        axis.legend(loc="best")
+        axis.grid(True, alpha=0.3)
+    axes[-1, 0].set_xlabel("time (us)")
 
     fig.suptitle("Perturbative open-gate optimization: pulse parameters")
     add_experiment_note(fig, note)
@@ -606,45 +583,41 @@ def plot_population_marginals(
     time_edges_us,
     initial_states,
     final_states,
-    n_levels,
+    structure,
     output_path,
     note=None,
 ):
-    initial_populations = np.abs(initial_states) ** 2
-    final_populations = np.abs(final_states) ** 2
-    initial_joint = initial_populations.reshape((-1, 4, n_levels))
-    final_joint = final_populations.reshape((-1, 4, n_levels))
-    initial_spin = initial_joint.sum(axis=2)
-    final_spin = final_joint.sum(axis=2)
-    initial_motion = initial_joint.sum(axis=1)
-    final_motion = final_joint.sum(axis=1)
+    initial_joint = (np.abs(initial_states) ** 2).reshape((-1, *structure.dims))
+    final_joint = (np.abs(final_states) ** 2).reshape((-1, *structure.dims))
+    # Marginal over the *other* subsystem: axis 2 traces out the second
+    # subsystem (keeping the first) and vice versa.
+    marginals = [
+        (initial_joint.sum(axis=2), final_joint.sum(axis=2)),
+        (initial_joint.sum(axis=1), final_joint.sum(axis=1)),
+    ]
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True, sharey="row")
-    spin_labels = ["00", "01", "10", "11"]
-    for spin_index, label in enumerate(spin_labels):
-        axes[0, 0].plot(time_edges_us, initial_spin[:, spin_index], label=f"|{label}>")
-        axes[0, 1].plot(time_edges_us, final_spin[:, spin_index], label=f"|{label}>")
-    for level in range(n_levels):
-        axes[1, 0].plot(time_edges_us, initial_motion[:, level], label=f"n={level}")
-        axes[1, 1].plot(time_edges_us, final_motion[:, level], label=f"n={level}")
+    for row, ((initial_marginal, final_marginal), name, labels) in enumerate(
+        zip(marginals, structure.names, structure.labels)
+    ):
+        for level, label in enumerate(labels):
+            axes[row, 0].plot(time_edges_us, initial_marginal[:, level], label=label)
+            axes[row, 1].plot(time_edges_us, final_marginal[:, level], label=label)
+        axes[row, 0].set_title(f"{name.capitalize()} population, initial pulse")
+        axes[row, 1].set_title(f"{name.capitalize()} population, optimized pulse")
+        axes[row, 0].set_ylabel(f"{name} population")
 
-    axes[0, 0].set_title("Two-qubit spin population, initial pulse")
-    axes[0, 1].set_title("Two-qubit spin population, optimized pulse")
-    axes[1, 0].set_title("Motion population, initial pulse")
-    axes[1, 1].set_title("Motion population, optimized pulse")
     axes[1, 0].set_xlabel("time (us)")
     axes[1, 1].set_xlabel("time (us)")
     for axis in axes:
         for item in axis:
             item.grid(True, alpha=0.3)
             item.set_ylim(-0.02, 1.02)
-    axes[0, 0].set_ylabel("spin population")
-    axes[1, 0].set_ylabel("motion population")
 
-    state_handles, state_labels = axes[0, 0].get_legend_handles_labels()
-    motion_handles, motion_labels = axes[1, 0].get_legend_handles_labels()
-    axes[0, 1].legend(state_handles, state_labels, loc="best")
-    axes[1, 1].legend(motion_handles, motion_labels, loc="best", ncol=2)
+    first_handles, first_labels = axes[0, 0].get_legend_handles_labels()
+    second_handles, second_labels = axes[1, 0].get_legend_handles_labels()
+    axes[0, 1].legend(first_handles, first_labels, loc="best")
+    axes[1, 1].legend(second_handles, second_labels, loc="best", ncol=2)
     fig.suptitle("Nominal state propagation after perturbative optimization")
     add_experiment_note(fig, note)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -655,7 +628,7 @@ def plot_population_marginals(
 def format_experiment_note(config, result, metrics):
     return "\n".join(
         [
-            "objective=open_gate_fidelity_expansion, target=MS_XX(pi/2)",
+            f"objective=noisy_gate_fidelity_expansion, system={config.system.type}",
             (
                 f"n_steps={config.pulse.n_steps}, maxiter={config.optimizer.maxiter}, "
                 f"workers={config.runtime.workers}"
@@ -665,8 +638,8 @@ def format_experiment_note(config, result, metrics):
                 f"l2={config.penalty.l2_smooth_weight:.6g}"
             ),
             (
-                f"open gate: {metrics['initial_open_gate_fidelity']:.6g} -> "
-                f"{metrics['final_open_gate_fidelity']:.6g}; "
+                f"noisy gate: {metrics['initial_noisy_gate_fidelity']:.6g} -> "
+                f"{metrics['final_noisy_gate_fidelity']:.6g}; "
                 f"close gate: {metrics['initial_close_gate_fidelity']:.6g} -> "
                 f"{metrics['final_close_gate_fidelity']:.6g}"
             ),
@@ -692,15 +665,23 @@ def format_value(value):
     return str(value)
 
 
+def system_params_rows(params):
+    """One ``(name, value)`` row per field of the system's params dataclass."""
+    return [
+        (field_info.name, format_value(getattr(params, field_info.name)))
+        for field_info in fields(params)
+    ]
+
+
 def print_experiment_report(config, result, metrics, outputs):
     print("\n=== Perturbative Open-Gate Optimization ===")
     print_section(
         "Configuration",
         [
-            ("objective", "open_gate_fidelity_expansion"),
-            ("target_gate", "MS_XX(pi/2)"),
-            ("n_levels", config.system.n_levels),
-            ("include_fluctuations", config.system.include_fluctuations),
+            ("objective", "noisy_gate_fidelity_expansion"),
+            ("system_type", config.system.type),
+            *system_params_rows(config.system.params),
+            ("include_fluctuations", config.system.noise.fluctuations.enabled),
             ("n_steps", config.pulse.n_steps),
             ("maxiter", config.optimizer.maxiter),
             ("workers", config.runtime.workers),
@@ -708,10 +689,13 @@ def print_experiment_report(config, result, metrics, outputs):
             ("l2_smooth_weight", format_value(config.penalty.l2_smooth_weight)),
         ],
     )
-    print_section(
-        "Fidelity",
+    fidelity_rows = []
+    if "initial_fidelity" in metrics:
+        fidelity_rows.append(
+            ("single_state", _transition(metrics["initial_fidelity"], metrics["final_fidelity"]))
+        )
+    fidelity_rows.extend(
         [
-            ("single_state", _transition(metrics["initial_fidelity"], metrics["final_fidelity"])),
             (
                 "close_gate",
                 _transition(
@@ -720,14 +704,15 @@ def print_experiment_report(config, result, metrics, outputs):
                 ),
             ),
             (
-                "open_gate",
+                "noisy_gate",
                 _transition(
-                    metrics["initial_open_gate_fidelity"],
-                    metrics["final_open_gate_fidelity"],
+                    metrics["initial_noisy_gate_fidelity"],
+                    metrics["final_noisy_gate_fidelity"],
                 ),
             ),
-        ],
+        ]
     )
+    print_section("Fidelity", fidelity_rows)
     print_section(
         "Objective And Penalty",
         [
@@ -755,7 +740,11 @@ def print_experiment_report(config, result, metrics, outputs):
         "Outputs",
         [
             ("pulse_plot", outputs["pulse_plot"]),
-            ("propagation_plot", outputs["propagation_plot"]),
+            *(
+                [("propagation_plot", outputs["propagation_plot"])]
+                if outputs.get("propagation_plot") is not None
+                else []
+            ),
             ("step_log", outputs["step_log"]),
             *(
                 [
@@ -778,6 +767,19 @@ def _transition(initial, final):
     return f"{initial:.12g} -> {final:.12g} (delta {delta:+.3g})"
 
 
+def control_bounds_rows(parameterization, pulse, channels):
+    """One bounds row per control channel, in the channel's display unit."""
+    lower, upper = parameterization.bounds_for(pulse.amplitudes.shape)
+    return [
+        (
+            f"{channel.label}_bounds_{channel.display_unit}",
+            f"{lower[0, index] * channel.display_scale:.12g} to "
+            f"{upper[0, index] * channel.display_scale:.12g}",
+        )
+        for index, channel in enumerate(channels)
+    ]
+
+
 def write_optimization_preview_report(
     report_path,
     *,
@@ -786,16 +788,13 @@ def write_optimization_preview_report(
     config,
     initial_pulse,
     parameterization,
-    noisy_system,
-    noise_specs,
+    channels,
+    open_system,
     state_pairs,
     kappa_metrics,
     custom_initial_metadata,
     extra_configuration,
 ):
-    lower, upper = parameterization.base._bounds_for(initial_pulse.amplitudes.shape)
-    bounds_lower_khz = lower[0] / RAD_S_PER_KHZ
-    bounds_upper_khz = upper[0] / RAD_S_PER_KHZ
     report_path = Path(report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     if custom_initial_metadata is None:
@@ -803,7 +802,7 @@ def write_optimization_preview_report(
     else:
         initial_pulse_source = Path(custom_initial_metadata["source_npz"]).name
     lines = [
-        "# Spin-Boson Perturbative Open-Gate Optimization",
+        f"# Perturbative Open-Gate Optimization ({config.system.type})",
         "",
         f"Generated at: {generated_at.isoformat(timespec='seconds')}",
         "",
@@ -813,16 +812,13 @@ def write_optimization_preview_report(
             ("Parameter", "Value"),
             [
                 ("experiment_dir", experiment_dir),
-                ("objective", "open_gate_fidelity_expansion"),
-                ("target_gate", "MS_XX(pi/2)"),
-                ("n_levels", config.system.n_levels),
+                ("objective", "noisy_gate_fidelity_expansion"),
+                ("system_type", config.system.type),
+                *system_params_rows(config.system.params),
                 ("n_steps", config.pulse.n_steps),
                 ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
-                ("phi_s", config.system.phi_s),
-                ("eta", config.system.eta),
-                ("include_fluctuations", config.system.include_fluctuations),
-                ("alpha1_bounds_khz", f"{bounds_lower_khz[0]:.12g} to {bounds_upper_khz[0]:.12g}"),
-                ("alpha2_bounds_khz", f"{bounds_lower_khz[1]:.12g} to {bounds_upper_khz[1]:.12g}"),
+                ("include_fluctuations", config.system.noise.fluctuations.enabled),
+                *control_bounds_rows(parameterization, initial_pulse, channels),
                 ("max_order", config.objective.max_order),
                 ("state_pair_count", len(state_pairs)),
                 ("l1_smooth_weight", config.penalty.l1_smooth_weight),
@@ -836,13 +832,26 @@ def write_optimization_preview_report(
         "",
         _markdown_table(("Metric", "Value", "Definition"), validity_rows(kappa_metrics)),
         "",
-        "## Noise Terms",
+        "## Fluctuation Terms",
         "",
         _markdown_table(
             ("Term", "Coefficient", "Definition", "Usage", "Spectral Norm"),
-            noise_term_rows(noisy_system, noise_specs),
+            fluctuation_term_rows(open_system),
         ),
         "",
+        *(
+            (
+                "## Decoherence Channels",
+                "",
+                _markdown_table(
+                    ("Channel", "Rate (1/s)", "Definition", "Spectral Norm"),
+                    decoherence_channel_rows(open_system.decoherence_channels),
+                ),
+                "",
+            )
+            if open_system.decoherence_channels
+            else ()
+        ),
         "## Results",
         "",
         "_Optimization has not completed yet. Final results will be appended here._",
@@ -872,16 +881,26 @@ def append_optimization_results_report(
         _markdown_table(
             ("Metric", "Initial", "Final", "Delta"),
             [
-                _result_row("single_state_fidelity", metrics["initial_fidelity"], metrics["final_fidelity"]),
+                *(
+                    [
+                        _result_row(
+                            "single_state_fidelity",
+                            metrics["initial_fidelity"],
+                            metrics["final_fidelity"],
+                        )
+                    ]
+                    if "initial_fidelity" in metrics
+                    else []
+                ),
                 _result_row(
                     "close_gate_fidelity",
                     metrics["initial_close_gate_fidelity"],
                     metrics["final_close_gate_fidelity"],
                 ),
                 _result_row(
-                    "open_gate_fidelity",
-                    metrics["initial_open_gate_fidelity"],
-                    metrics["final_open_gate_fidelity"],
+                    "noisy_gate_fidelity",
+                    metrics["initial_noisy_gate_fidelity"],
+                    metrics["final_noisy_gate_fidelity"],
                 ),
                 _result_row(
                     "decoherence_correction",
@@ -939,25 +958,33 @@ def append_optimization_results_report(
     return report_path
 
 
-def noise_term_rows(system, specs):
-    matrices = tuple(system.static_fluctuations) + tuple(system.control_fluctuations)
-    rows = []
-    for spec, matrix in zip(specs, matrices, strict=True):
-        matrix = np.asarray(matrix)
-        rows.append(
-            (
-                spec["name"],
-                spec["coefficient"],
-                spec["definition"],
-                spec["usage"],
-                float(np.linalg.norm(matrix, ord=2)),
-            )
+def fluctuation_term_rows(open_system):
+    return [
+        (
+            term.name,
+            term.coefficient,
+            term.definition,
+            term.usage,
+            float(np.linalg.norm(term.matrix, ord=2)),
         )
-    return rows
+        for term in open_system.fluctuation_terms
+    ]
 
 
-def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, collapse_operators=()):
-    lower, upper = parameterization.base._bounds_for(pulse.amplitudes.shape)
+def decoherence_channel_rows(channels):
+    return [
+        (
+            channel.name,
+            channel.rate,
+            channel.definition,
+            float(np.linalg.norm(channel.matrix, ord=2)),
+        )
+        for channel in channels
+    ]
+
+
+def calculate_kappa_metrics(system, open_system, pulse, parameterization, collapse_operators=()):
+    lower, upper = parameterization.bounds_for(pulse.amplitudes.shape)
     channel_bounds = tuple(zip(lower[0], upper[0], strict=True))
     boundary_controls = np.asarray(
         np.meshgrid(*(bound for bound in channel_bounds), indexing="ij"),
@@ -965,11 +992,11 @@ def calculate_kappa_metrics(system, noisy_system, pulse, parameterization, colla
     ).reshape(len(channel_bounds), -1).T
     nominal_norms = []
     fluctuation_norms = []
-    has_fluctuations = bool(noisy_system.static_fluctuations or noisy_system.control_fluctuations)
+    has_fluctuations = bool(open_system.static_fluctuations or open_system.control_fluctuations)
     for controls in boundary_controls:
         nominal_norms.append(float(np.linalg.norm(system.nominal_hamiltonian(controls), ord=2)))
         fluctuation_norms.append(
-            float(np.linalg.norm(noisy_system.fluctuation_hamiltonian(controls), ord=2))
+            float(np.linalg.norm(open_system.fluctuation_hamiltonian(controls), ord=2))
             if has_fluctuations
             else 0.0
         )
@@ -1030,8 +1057,8 @@ def print_optimization_preview(report_path, config, initial_metrics, kappa_metri
     print_section(
         "Configuration",
         [
-            ("n_levels", config.system.n_levels),
-            ("include_fluctuations", config.system.include_fluctuations),
+            ("system_type", config.system.type),
+            ("include_fluctuations", config.system.noise.fluctuations.enabled),
             ("n_steps", config.pulse.n_steps),
             ("maxiter", config.optimizer.maxiter),
             ("workers", config.runtime.workers),
@@ -1080,45 +1107,6 @@ def _format_markdown_value(value):
     return value
 
 
-def _customized_initial_pulse(
-    n_steps=200,
-    total_time_us=225.8,
-    alpha1_khz_bounds=DEFAULT_ALPHA1_KHZ_BOUNDS,
-    alpha2_khz_bounds=DEFAULT_ALPHA2_KHZ_BOUNDS,
-    random_seed=None,
-):
-    if n_steps < 1:
-        raise ValueError("n_steps must be at least 1.")
-    total_time = float(total_time_us) * 1e-6
-    if total_time <= 0.0:
-        raise ValueError("total_time_us must be positive.")
-
-    alpha1_lower, alpha1_upper = _khz_bounds_to_rad_s(alpha1_khz_bounds)
-    alpha2_lower, alpha2_upper = _khz_bounds_to_rad_s(alpha2_khz_bounds)
-    dt = total_time / n_steps
-
-    alpha1_center = 0.5 * (alpha1_upper + alpha1_lower)
-    alpha1_scale = 0.5 * (alpha1_upper - alpha1_lower)
-    alpha1_noise = (
-        np.random.randn(n_steps)
-        if random_seed is None
-        else np.random.default_rng(random_seed).standard_normal(n_steps)
-    )
-    alpha1 = alpha1_center + 0.7 * alpha1_scale + 0.3 * alpha1_scale * alpha1_noise
-    alpha1 = np.clip(alpha1, alpha1_lower, alpha1_upper)
-    alpha2 = alpha2_upper * np.ones(n_steps, dtype=float)
-
-    return PiecewiseConstantPulse(
-        amplitudes=np.column_stack([alpha1, alpha2]),
-        dt=dt,
-    )
-def _khz_bounds_to_rad_s(bounds):
-    lower, upper = np.asarray(bounds, dtype=float)
-    if upper <= lower:
-        raise ValueError("upper bounds must be greater than lower bounds.")
-    return 2.0 * np.pi * 1000.0 * lower, 2.0 * np.pi * 1000.0 * upper
-
-
 def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, atol=1e-9):
     npz_path = Path(npz_path)
     with np.load(npz_path) as data:
@@ -1132,13 +1120,20 @@ def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, 
             f"{npz_path} amplitudes shape {amplitudes.shape} does not match "
             f"expected {reference_pulse.amplitudes.shape}."
         )
-    if not np.allclose(amplitudes[[0, -1], 1], 0.0, atol=atol):
-        raise ValueError(f"{npz_path} alpha2 endpoints must be zero.")
 
     parameters = parameterization.to_parameters(amplitudes)
     if np.any(parameters < -1.0 - atol) or np.any(parameters > 1.0 + atol):
         raise ValueError(f"{npz_path} amplitudes exceed the configured parameter bounds.")
     parameters = np.clip(parameters, -1.0, 1.0)
+    # Round-tripping through the parameterization applies its structural
+    # constraints (e.g. frozen endpoints); a mismatch means the loaded pulse
+    # violates them.
+    projected = parameterization.to_physical(np.array(parameters, copy=True))
+    if not np.allclose(projected, amplitudes, atol=1e-6):
+        raise ValueError(
+            f"{npz_path} amplitudes violate the parameterization constraints "
+            "(e.g. fixed endpoint values)."
+        )
 
     experiment_dt = float(reference_pulse.dt)
     dt_missing = source_dt is None
@@ -1162,12 +1157,12 @@ def load_custom_initial_parameters(npz_path, reference_pulse, parameterization, 
     }
 
 
-def perturbative_fidelity_terms(system, pulse, target_gate, n_levels, max_order=2, drop_odd_average=True):
+def perturbative_fidelity_terms(system, pulse, state_pairs, max_order=2, drop_odd_average=True):
     step_builder = PerturbativeStepBuilder()
     objective = ExpansionFidelity(max_order=max_order, drop_odd_average=drop_odd_average)
     evolution = PerturbativeExpansionEvolution(step_builder, max_order=max_order)
     pair_rows = []
-    for pair_index, pair in enumerate(motion_resolved_gate_state_pairs(target_gate, n_levels)):
+    for pair_index, pair in enumerate(state_pairs):
         context = EvolutionContext(
             initial_state=pair.initial_state,
             target_state=pair.target_state,
@@ -1217,67 +1212,48 @@ def perturbative_fidelity_terms(system, pulse, target_gate, n_levels, max_order=
     return summary, pair_rows
 
 
-def build_systems(config):
-    system = spin_boson_control_system(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
-    )
-    if not config.system.include_fluctuations:
-        noisy_system = spin_boson_control_system(
-            n_levels=config.system.n_levels,
-            phi_s=config.system.phi_s,
-            eta=config.system.eta,
-        )
-        return system, noisy_system, []
+def system_definition(config):
+    return get_system(config.system.type)
 
-    noise_specs = spin_boson_noise_term_specs(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
+
+def output_prefix(config):
+    """Run-directory prefix: ``output.prefix``, or the system name if unset."""
+    prefix = config.output.prefix
+    if prefix:
+        return str(prefix)
+    return config.system.type
+
+
+def build_systems(config):
+    """Return ``(closed_system, open_system)`` from the system definition."""
+    return system_definition(config).build_systems(
+        config.system.params, config.system.noise
     )
-    noisy_system = spin_boson_noisy_control_system(
-        n_levels=config.system.n_levels,
-        phi_s=config.system.phi_s,
-        eta=config.system.eta,
-    )
-    return system, noisy_system, noise_specs
 
 
 def build_initial_pulse(config):
-    return _customized_initial_pulse(
-        n_steps=config.pulse.n_steps,
-        total_time_us=config.pulse.total_time_us,
-        alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
-        alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
-        random_seed=config.pulse.random_seed,
+    return system_definition(config).build_initial_pulse(
+        config.system.params, config.pulse
     )
 
 
 def build_parameterization(config, pulse):
-    return Alpha2EndpointZeroParameterization(
-        spin_boson_parameterization(
-            pulse.n_steps,
-            alpha1_khz_bounds=config.pulse.alpha1_khz_bounds,
-            alpha2_khz_bounds=config.pulse.alpha2_khz_bounds,
-        )
+    return system_definition(config).build_parameterization(
+        config.system.params, pulse
     )
 
 
-def build_collapse_operators(config):
-    if not config.system.include_decoherence:
-        return []
-    return spin_boson_collapse_operators(
-        config.system.n_levels,
-        gamma_heating=config.system.gamma_heating,
-        gamma_motional_dephasing=config.system.gamma_motional_dephasing,
-        gamma_spin_dephasing=config.system.gamma_spin_dephasing,
-    )
+def build_target_gate(config):
+    return system_definition(config).target_gate(config.system.params)
+
+
+def build_state_pairs(config):
+    return system_definition(config).state_pairs(config.system.params)
 
 
 def build_decoherence_correction_problem(
     config,
-    noisy_system,
+    open_system,
     pulse,
     state_pairs,
     collapse_operators,
@@ -1285,8 +1261,8 @@ def build_decoherence_correction_problem(
     n_workers=None,
 ):
     step_builder = UnitaryStepBuilder()
-    return ExpansionStateAverageFidelity(
-        system=noisy_system,
+    return StateAverageProblem(
+        system=open_system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(
             step_builder,
@@ -1303,14 +1279,14 @@ def build_decoherence_correction_problem(
     )
 
 
-def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
+def build_objective_problem(config, open_system, initial_pulse, state_pairs):
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(
         max_order=config.objective.max_order,
         drop_odd_average=config.objective.drop_odd_average,
     )
-    expansion_problem = ExpansionStateAverageFidelity(
-        system=noisy_system,
+    expansion_problem = StateAverageProblem(
+        system=open_system,
         pulse=initial_pulse,
         evolution=PerturbativeExpansionEvolution(
             step_builder,
@@ -1325,18 +1301,18 @@ def build_objective_problem(config, noisy_system, initial_pulse, state_pairs):
         normalize_weights=config.objective.normalize_weights,
         n_workers=config.runtime.workers,
     )
-    collapse_operators = build_collapse_operators(config)
+    collapse_operators = getattr(open_system, "collapse_operators", ())
     if not collapse_operators:
         return expansion_problem
     decoherence_problem = build_decoherence_correction_problem(
         config,
-        noisy_system,
+        open_system,
         initial_pulse,
         state_pairs,
         collapse_operators,
         include_closed=False,
     )
-    return CombinedStateAverageProblem(expansion_problem, decoherence_problem)
+    return SumProblem(expansion_problem, decoherence_problem)
 
 
 def build_optimizer(config):
@@ -1358,8 +1334,14 @@ def run_perturbative_experiment(
     print_report=True,
 ):
     config = _coerce_experiment_config(config)
-    n_levels = config.system.n_levels
-    system, noisy_system, noise_specs = build_systems(config)
+    definition = system_definition(config)
+    params = config.system.params
+    channels = definition.control_channels(params)
+    channel_names = tuple(channel.label for channel in channels)
+    # export_pulse_controls divides amplitudes by this to get display units;
+    # assumes a common display scale across channels.
+    export_unit_divisor = 1.0 / channels[0].display_scale
+    system, open_system = build_systems(config)
     initial_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, initial_pulse)
     custom_initial_metadata = None
@@ -1371,10 +1353,9 @@ def run_perturbative_experiment(
         )
         for warning in custom_initial_metadata["warnings"]:
             print(warning, file=sys.stderr, flush=True)
-    target_gate = ms_xx_pi_over_2_gate()
-    state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
-    collapse_operators = build_collapse_operators(config)
-    optimization_problem = build_objective_problem(config, noisy_system, initial_pulse, state_pairs)
+    state_pairs = build_state_pairs(config)
+    collapse_operators = open_system.collapse_operators
+    optimization_problem = build_objective_problem(config, open_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
         parameterization,
@@ -1405,10 +1386,11 @@ def run_perturbative_experiment(
     output_root = Path(output_root) if output_root is not None else config.output.output_root
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         output_root,
-        run_label or "spin_boson_perturbative",
+        run_label or output_prefix(config),
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
+    config_snapshot_path = write_config_snapshot(config, experiment_dir / "config.yaml")
 
     optimizer_options = config.optimizer.options
     optimizer = build_optimizer(config)
@@ -1422,8 +1404,8 @@ def run_perturbative_experiment(
     fidelity_pair_terms_path = experiment_dir / "fidelity_terms_by_pair.csv"
     latest_pulse_stem = experiment_dir / "latest_pulse"
     latest_parameters_path = experiment_dir / "latest_parameters.npz"
-    pulse_path = experiment_dir / "spin_boson_perturbative_pulses.png"
-    propagation_path = experiment_dir / "spin_boson_perturbative_state_propagation.png"
+    pulse_path = experiment_dir / f"{config.system.type}_perturbative_pulses.png"
+    propagation_path = experiment_dir / f"{config.system.type}_perturbative_state_propagation.png"
     initial_pulse_stem = experiment_dir / "initial_pulse"
     final_pulse_stem = experiment_dir / "final_pulse"
     report_path = experiment_dir / "report.md"
@@ -1449,15 +1431,15 @@ def run_perturbative_experiment(
         ("initial_raw_fidelity", penalized_problem.raw_value(initial_parameters)),
         (
             "initial_close_gate_fidelity",
-            closed_gate_fidelity(system, masked_initial_pulse, target_gate, n_levels),
+            closed_gate_fidelity(system, masked_initial_pulse, state_pairs),
         ),
         (
-            "initial_open_gate_fidelity",
-            open_gate_fidelity(
-                noisy_system,
+            "initial_noisy_gate_fidelity",
+            noisy_gate_fidelity(
+                open_system,
                 masked_initial_pulse,
-                target_gate,
-                n_levels,
+                state_pairs,
+                collapse_operators=collapse_operators,
                 n_workers=config.runtime.workers,
             ),
         ),
@@ -1468,19 +1450,16 @@ def run_perturbative_experiment(
     def decoherence_correction(pulse):
         if not collapse_operators:
             return 0.0
-        correction_problem = build_decoherence_correction_problem(
+        with build_decoherence_correction_problem(
             config,
-            noisy_system,
+            open_system,
             pulse,
             state_pairs,
             collapse_operators,
             include_closed=False,
             n_workers=1,
-        )
-        try:
+        ) as correction_problem:
             return correction_problem.value(pulse)
-        finally:
-            correction_problem.shutdown()
 
     if collapse_operators:
         initial_preview_metrics.append(
@@ -1488,7 +1467,7 @@ def run_perturbative_experiment(
         )
     kappa_metrics = calculate_kappa_metrics(
         system,
-        noisy_system,
+        open_system,
         masked_initial_pulse,
         parameterization,
         collapse_operators=collapse_operators,
@@ -1500,8 +1479,8 @@ def run_perturbative_experiment(
         config=config,
         initial_pulse=initial_pulse,
         parameterization=parameterization,
-        noisy_system=noisy_system,
-        noise_specs=noise_specs,
+        channels=channels,
+        open_system=open_system,
         state_pairs=state_pairs,
         kappa_metrics=kappa_metrics,
         custom_initial_metadata=custom_initial_metadata,
@@ -1516,12 +1495,12 @@ def run_perturbative_experiment(
         l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
         step_log.append(
             step=step,
-            close_fidelity=closed_gate_fidelity(system, pulse, target_gate, n_levels),
-            open_fidelity=open_gate_fidelity(
-                noisy_system,
+            close_fidelity=closed_gate_fidelity(system, pulse, state_pairs),
+            open_fidelity=noisy_gate_fidelity(
+                open_system,
                 pulse,
-                target_gate,
-                n_levels,
+                state_pairs,
+                collapse_operators=collapse_operators,
                 n_workers=config.runtime.workers,
             ),
             cost_function=penalized_problem.value(parameters),
@@ -1532,10 +1511,9 @@ def run_perturbative_experiment(
         )
         if fidelity_terms_log is not None:
             fidelity_summary, fidelity_pair_rows = perturbative_fidelity_terms(
-                noisy_system,
+                open_system,
                 pulse,
-                target_gate,
-                n_levels,
+                state_pairs,
                 max_order=config.objective.max_order,
                 drop_odd_average=config.objective.drop_odd_average,
             )
@@ -1546,7 +1524,8 @@ def run_perturbative_experiment(
         latest_pulse_npz_path, latest_pulse_csv_path = export_pulse_controls(
             pulse,
             latest_pulse_stem,
-            RAD_S_PER_KHZ,
+            export_unit_divisor,
+            channel_names=channel_names,
         )
         np.savez(
             latest_parameters_path,
@@ -1615,87 +1594,100 @@ def run_perturbative_experiment(
         penalized_problem.parameter_shape,
     )
 
-    if not np.allclose(masked_initial_pulse.amplitudes[[0, -1], 1], 0.0):
-        raise RuntimeError("Initial alpha2 endpoints are not masked to zero.")
-    if not np.allclose(final_pulse.amplitudes[[0, -1], 1], 0.0):
-        raise RuntimeError("Optimized alpha2 endpoints are not masked to zero.")
+    for pulse_label, checked_pulse in (
+        ("Initial", masked_initial_pulse),
+        ("Optimized", final_pulse),
+    ):
+        # Round-tripping applies the parameterization's structural
+        # constraints (e.g. frozen endpoints); a mismatch means the pulse
+        # escaped them during optimization.
+        projected = parameterization.to_physical(
+            parameterization.to_parameters(checked_pulse.amplitudes)
+        )
+        if not np.allclose(projected, checked_pulse.amplitudes, atol=1e-6):
+            raise RuntimeError(
+                f"{pulse_label} pulse violates the parameterization constraints."
+            )
 
     initial_close_gate_fidelity = closed_gate_fidelity(
         system,
         masked_initial_pulse,
-        target_gate,
-        n_levels,
+        state_pairs,
     )
     final_close_gate_fidelity = closed_gate_fidelity(
         system,
         final_pulse,
-        target_gate,
-        n_levels,
+        state_pairs,
     )
-    initial_open_gate_fidelity = open_gate_fidelity(
-        noisy_system,
+    initial_noisy_gate_fidelity = noisy_gate_fidelity(
+        open_system,
         masked_initial_pulse,
-        target_gate,
-        n_levels,
+        state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
-    final_open_gate_fidelity = open_gate_fidelity(
-        noisy_system,
+    final_noisy_gate_fidelity = noisy_gate_fidelity(
+        open_system,
         final_pulse,
-        target_gate,
-        n_levels,
+        state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
 
-    lower, upper = parameterization.base._bounds_for(final_pulse.amplitudes.shape)
+    lower, upper = parameterization.bounds_for(final_pulse.amplitudes.shape)
     bound_tolerance = 1e-8
     if np.any(final_pulse.amplitudes < lower - bound_tolerance) or np.any(
         final_pulse.amplitudes > upper + bound_tolerance
     ):
         raise RuntimeError("Optimized pulse violates amplitude bounds.")
 
-    dimension = 4 * n_levels
-    context = EvolutionContext(
-        initial_state=basis_state(0, dimension),
-        target_state=ms_bell_target_motion_ground(n_levels),
-    )
-    nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
-    initial_single_state_fidelity = StateTransferFidelity(context.target_state).evaluate(
-        nominal_evolution.evolve(system, masked_initial_pulse, context)
-    )
-    final_single_state_fidelity = StateTransferFidelity(context.target_state).evaluate(
-        nominal_evolution.evolve(system, final_pulse, context)
-    )
-    initial_states = propagate_states(nominal_evolution, system, masked_initial_pulse, context)
-    final_states = propagate_states(nominal_evolution, system, final_pulse, context)
-    if not np.allclose(np.sum(np.abs(initial_states) ** 2, axis=1), 1.0, atol=1e-8):
-        raise RuntimeError("Initial propagation populations are not normalized.")
-    if not np.allclose(np.sum(np.abs(final_states) ** 2, axis=1), 1.0, atol=1e-8):
-        raise RuntimeError("Final propagation populations are not normalized.")
+    probe = definition.probe_state_pair(params)
+    structure = definition.population_structure(params)
+    probe_metrics = {}
+    initial_states = final_states = None
+    if probe is not None:
+        context = EvolutionContext(
+            initial_state=probe.initial_state,
+            target_state=probe.target_state,
+        )
+        nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
+        probe_metrics["initial_fidelity"] = StateTransferFidelity(context.target_state).evaluate(
+            nominal_evolution.evolve(system, masked_initial_pulse, context)
+        )
+        probe_metrics["final_fidelity"] = StateTransferFidelity(context.target_state).evaluate(
+            nominal_evolution.evolve(system, final_pulse, context)
+        )
+        initial_states = propagate_states(nominal_evolution, system, masked_initial_pulse, context)
+        final_states = propagate_states(nominal_evolution, system, final_pulse, context)
+        if not np.allclose(np.sum(np.abs(initial_states) ** 2, axis=1), 1.0, atol=1e-8):
+            raise RuntimeError("Initial propagation populations are not normalized.")
+        if not np.allclose(np.sum(np.abs(final_states) ** 2, axis=1), 1.0, atol=1e-8):
+            raise RuntimeError("Final propagation populations are not normalized.")
 
     time_us = (np.arange(initial_pulse.n_steps) + 0.5) * initial_pulse.dt * 1e6
     time_edges_us = np.arange(initial_pulse.n_steps + 1) * initial_pulse.dt * 1e6
     initial_pulse_npz_path, initial_pulse_csv_path = export_pulse_controls(
         masked_initial_pulse,
         initial_pulse_stem,
-        RAD_S_PER_KHZ,
+        export_unit_divisor,
+        channel_names=channel_names,
     )
     final_pulse_npz_path, final_pulse_csv_path = export_pulse_controls(
         final_pulse,
         final_pulse_stem,
-        RAD_S_PER_KHZ,
+        export_unit_divisor,
+        channel_names=channel_names,
     )
 
     initial_decoherence_correction = decoherence_correction(masked_initial_pulse)
     final_decoherence_correction = decoherence_correction(final_pulse)
 
     metrics = {
-        "initial_fidelity": initial_single_state_fidelity,
-        "final_fidelity": final_single_state_fidelity,
+        **probe_metrics,
         "initial_close_gate_fidelity": initial_close_gate_fidelity,
         "final_close_gate_fidelity": final_close_gate_fidelity,
-        "initial_open_gate_fidelity": initial_open_gate_fidelity,
-        "final_open_gate_fidelity": final_open_gate_fidelity,
+        "initial_noisy_gate_fidelity": initial_noisy_gate_fidelity,
+        "final_noisy_gate_fidelity": final_noisy_gate_fidelity,
         "initial_decoherence_correction": initial_decoherence_correction,
         "final_decoherence_correction": final_decoherence_correction,
         "initial_l1_penalty": initial_l1_penalty,
@@ -1706,19 +1698,21 @@ def run_perturbative_experiment(
         "final_penalized_objective": final_objective,
     }
     experiment_note = format_experiment_note(config, result, metrics)
-    plot_pulses(time_us, masked_initial_pulse, final_pulse, pulse_path, note=experiment_note)
-    plot_population_marginals(
-        time_edges_us,
-        initial_states,
-        final_states,
-        n_levels,
-        propagation_path,
-        note=experiment_note,
-    )
+    plot_pulses(time_us, masked_initial_pulse, final_pulse, channels, pulse_path, note=experiment_note)
+    has_propagation_plot = structure is not None and initial_states is not None
+    if has_propagation_plot:
+        plot_population_marginals(
+            time_edges_us,
+            initial_states,
+            final_states,
+            structure,
+            propagation_path,
+            note=experiment_note,
+        )
 
     for path in (
         pulse_path,
-        propagation_path,
+        *((propagation_path,) if has_propagation_plot else ()),
         step_log_path,
         latest_pulse_stem.with_suffix(".npz"),
         latest_pulse_stem.with_suffix(".csv"),
@@ -1736,8 +1730,9 @@ def run_perturbative_experiment(
                 raise RuntimeError(f"Expected non-empty fidelity diagnostics at {path}.")
 
     outputs = {
+        "config_snapshot": config_snapshot_path,
         "pulse_plot": pulse_path,
-        "propagation_plot": propagation_path,
+        "propagation_plot": propagation_path if has_propagation_plot else None,
         "step_log": step_log_path,
         "fidelity_terms": fidelity_terms_path if save_fidelity_terms else None,
         "fidelity_terms_by_pair": fidelity_pair_terms_path if save_fidelity_terms else None,
@@ -1755,7 +1750,11 @@ def run_perturbative_experiment(
         result=result,
         figures=[
             ("Pulse parameters", pulse_path),
-            ("State propagation", propagation_path),
+            *(
+                [("State propagation", propagation_path)]
+                if has_propagation_plot
+                else []
+            ),
         ],
         outputs=outputs,
         interrupted=interrupted,
@@ -1818,7 +1817,7 @@ def write_evaluation_report(
     custom_initial_metadata,
 ):
     lines = [
-        "# Spin-Boson Pulse Evaluation",
+        f"# Pulse Evaluation ({config.system.type})",
         "",
         f"Generated at: {generated_at.isoformat(timespec='seconds')}",
         "",
@@ -1829,11 +1828,10 @@ def write_evaluation_report(
             [
                 ("experiment_dir", experiment_dir),
                 ("pulse_source", pulse_source),
-                ("n_levels", config.system.n_levels),
+                ("system_type", config.system.type),
+                *system_params_rows(config.system.params),
                 ("n_steps", config.pulse.n_steps),
-                ("phi_s", config.system.phi_s),
-                ("eta", config.system.eta),
-                ("include_fluctuations", config.system.include_fluctuations),
+                ("include_fluctuations", config.system.noise.fluctuations.enabled),
                 ("workers", config.runtime.workers),
                 *custom_initial_configuration(custom_initial_metadata),
             ],
@@ -1845,21 +1843,34 @@ def write_evaluation_report(
         "",
         "## Outputs",
         "",
-        _markdown_table(("Output", "Path"), outputs.items()),
+        _markdown_table(
+            ("Output", "Path"),
+            [(name, path) for name, path in outputs.items() if path is not None],
+        ),
         "",
-        "## Figures",
-        "",
-        f"![State propagation]({Path(outputs['propagation_plot']).name})",
-        "",
+        *(
+            (
+                "## Figures",
+                "",
+                f"![State propagation]({Path(outputs['propagation_plot']).name})",
+                "",
+            )
+            if outputs.get("propagation_plot") is not None
+            else ()
+        ),
     ]
     report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return report_path
 
 
-def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True):
+def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print_report=True, faithful=False, hermite_points=5):
     config = _coerce_experiment_config(config)
-    n_levels = config.system.n_levels
-    system, noisy_system, _noise_specs = build_systems(config)
+    definition = system_definition(config)
+    params = config.system.params
+    channels = definition.control_channels(params)
+    channel_names = tuple(channel.label for channel in channels)
+    export_unit_divisor = 1.0 / channels[0].display_scale
+    system, open_system = build_systems(config)
     reference_pulse = build_initial_pulse(config)
     parameterization = build_parameterization(config, reference_pulse)
     custom_initial_metadata = None
@@ -1887,79 +1898,91 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         dt=reference_pulse.dt,
     )
 
-    target_gate = ms_xx_pi_over_2_gate()
-    close_fidelity = closed_gate_fidelity(system, evaluated_pulse, target_gate, n_levels)
-    open_fidelity = open_gate_fidelity(
-        noisy_system,
+    state_pairs = build_state_pairs(config)
+    collapse_operators = open_system.collapse_operators
+    close_fidelity = closed_gate_fidelity(system, evaluated_pulse, state_pairs)
+    noisy_fidelity = noisy_gate_fidelity(
+        open_system,
         evaluated_pulse,
-        target_gate,
-        n_levels,
+        state_pairs,
+        collapse_operators=collapse_operators,
         n_workers=config.runtime.workers,
     )
-    dimension = 4 * n_levels
-    context = EvolutionContext(
-        initial_state=basis_state(0, dimension),
-        target_state=ms_bell_target_motion_ground(n_levels),
-    )
-    nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
-    state_fidelity = StateTransferFidelity(context.target_state).evaluate(
-        nominal_evolution.evolve(system, evaluated_pulse, context)
-    )
-    reference_states = propagate_states(nominal_evolution, system, masked_reference_pulse, context)
-    evaluated_states = propagate_states(nominal_evolution, system, evaluated_pulse, context)
-    if not np.allclose(np.sum(np.abs(evaluated_states) ** 2, axis=1), 1.0, atol=1e-8):
-        raise RuntimeError("Evaluation propagation populations are not normalized.")
+    probe = definition.probe_state_pair(params)
+    structure = definition.population_structure(params)
+    state_fidelity = None
+    reference_states = evaluated_states = None
+    if probe is not None:
+        context = EvolutionContext(
+            initial_state=probe.initial_state,
+            target_state=probe.target_state,
+        )
+        nominal_evolution = NominalUnitaryEvolution(UnitaryStepBuilder())
+        state_fidelity = StateTransferFidelity(context.target_state).evaluate(
+            nominal_evolution.evolve(system, evaluated_pulse, context)
+        )
+        reference_states = propagate_states(nominal_evolution, system, masked_reference_pulse, context)
+        evaluated_states = propagate_states(nominal_evolution, system, evaluated_pulse, context)
+        if not np.allclose(np.sum(np.abs(evaluated_states) ** 2, axis=1), 1.0, atol=1e-8):
+            raise RuntimeError("Evaluation propagation populations are not normalized.")
 
     generated_at = generated_at or datetime.now()
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         config.output.output_root,
-        "spin_boson_evaluation",
+        f"{output_prefix(config)}_evaluation",
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
+    config_snapshot_path = write_config_snapshot(config, experiment_dir / "config.yaml")
     pulse_stem = experiment_dir / "evaluated_pulse"
     pulse_npz_path, pulse_csv_path = export_pulse_controls(
         evaluated_pulse,
         pulse_stem,
-        RAD_S_PER_KHZ,
+        export_unit_divisor,
+        channel_names=channel_names,
     )
     propagation_path = experiment_dir / "eva_state_propagation.png"
     report_path = experiment_dir / "eva_report.md"
     time_edges_us = np.arange(evaluated_pulse.n_steps + 1) * evaluated_pulse.dt * 1e6
-    plot_population_marginals(
-        time_edges_us,
-        reference_states,
-        evaluated_states,
-        n_levels,
-        propagation_path,
-        note=f"pulse_source={Path(pulse_source).name if pulse_source != 'initial_pulse' else pulse_source}",
-    )
+    has_propagation_plot = structure is not None and evaluated_states is not None
+    if has_propagation_plot:
+        plot_population_marginals(
+            time_edges_us,
+            reference_states,
+            evaluated_states,
+            structure,
+            propagation_path,
+            note=f"pulse_source={Path(pulse_source).name if pulse_source != 'initial_pulse' else pulse_source}",
+        )
 
     metrics = {
-        "state_fidelity": state_fidelity,
+        **({"state_fidelity": state_fidelity} if state_fidelity is not None else {}),
         "close_gate_fidelity": close_fidelity,
-        "open_gate_fidelity": open_fidelity,
+        "noisy_gate_fidelity": noisy_fidelity,
     }
-    collapse_operators = build_collapse_operators(config)
     if collapse_operators:
-        state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
-        correction_problem = build_decoherence_correction_problem(
+        with build_decoherence_correction_problem(
             config,
-            noisy_system,
+            open_system,
             evaluated_pulse,
             state_pairs,
             collapse_operators,
             include_closed=False,
             n_workers=1,
-        )
-        try:
+        ) as correction_problem:
             metrics["decoherence_correction"] = correction_problem.value(evaluated_pulse)
-        finally:
-            correction_problem.shutdown()
+    if faithful:
+        metrics["faithful_gate_fidelity"] = faithful_gate_fidelity(
+            open_system,
+            evaluated_pulse,
+            state_pairs,
+            hermite_points=hermite_points,
+        )
     outputs = {
+        "config_snapshot": config_snapshot_path,
         "evaluated_pulse_npz": pulse_npz_path,
         "evaluated_pulse_csv": pulse_csv_path,
-        "propagation_plot": propagation_path,
+        "propagation_plot": propagation_path if has_propagation_plot else None,
         "eva_report": report_path,
     }
     write_evaluation_report(
@@ -1973,15 +1996,16 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
         custom_initial_metadata=custom_initial_metadata,
     )
     for path in outputs.values():
-        if not path.exists() or path.stat().st_size == 0:
+        if path is not None and (not path.exists() or path.stat().st_size == 0):
             raise RuntimeError(f"Expected non-empty evaluation output at {path}.")
     if print_report:
-        print("\n=== Spin-Boson Pulse Evaluation ===")
+        print("\n=== Pulse Evaluation ===")
         print_section("Metrics", [(name, format_value(value)) for name, value in metrics.items()])
         print(f"experiment_dir={experiment_dir}")
         print(f"evaluated_pulse_npz={pulse_npz_path}")
         print(f"evaluated_pulse_csv={pulse_csv_path}")
-        print(f"propagation_plot={propagation_path}")
+        if has_propagation_plot:
+            print(f"propagation_plot={propagation_path}")
         print(f"eva_report={report_path}")
 
     return {
@@ -1997,7 +2021,8 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "evaluate":
-        evaluate_pulse(parse_evaluate_args(sys.argv[2:]))
+        config, evaluate_options = parse_evaluate_args(sys.argv[2:])
+        evaluate_pulse(config, **evaluate_options)
     else:
         run_perturbative_experiment(parse_args())
 

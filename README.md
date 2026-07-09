@@ -19,8 +19,11 @@ from `doc/report_opengrape_iontrap.tex`. Static fluctuation matrices represent
 `sigma_xi H_xi`; control fluctuation matrices represent `sigma_chi_i H_chi_i`;
 the fluctuation Hamiltonian is
 `sum static_fluctuations + sum control_i * control_fluctuation_i`. The
-short-time-correlation decoherence limit belongs to the Lindblad/density-matrix
-path and is intentionally left as a future module.
+short-time-correlation decoherence limit is handled by the Lindblad path:
+`LindbladExpansionEvolution` + `LindbladCorrectedStateFidelity` add a
+first-order decoherence correction inside the optimization loop, and
+`faithful_gate_fidelity` (exact density-matrix propagation with Gauss-Hermite
+averaging over the fluctuations) provides the evaluation-time cross-check.
 
 ## Quick Example
 
@@ -31,7 +34,8 @@ from quantum_control import (
     ControlProblem,
     EvolutionContext,
     ExpansionFidelity,
-    IonTrapRFSystem,
+    FluctuationTerm,
+    OpenSystem,
     PerturbativeExpansionDifferentiator,
     PerturbativeExpansionEvolution,
     PerturbativeStepBuilder,
@@ -41,11 +45,13 @@ from quantum_control import (
 sx = np.array([[0, 1], [1, 0]], dtype=complex)
 sz = np.array([[1, 0], [0, -1]], dtype=complex)
 
-system = IonTrapRFSystem(
+system = OpenSystem(
     drift=np.zeros((2, 2), dtype=complex),
     controls=[sx],
-    static_fluctuations=[0.01 * sz],
-    control_fluctuations=[0.02 * sx],
+    noise_terms=[
+        FluctuationTerm(name="dephasing", operator=sz, definition="sigma_z", coefficient=0.01, kind="static"),
+        FluctuationTerm(name="amplitude", operator=sx, definition="sigma_x", coefficient=0.02, kind="control"),
+    ],
 )
 pulse = PiecewiseConstantPulse(np.full((20, 1), 0.1), dt=0.05)
 context = EvolutionContext(
@@ -73,65 +79,55 @@ gradient = problem.gradient()
 
 ## CLI Usage
 
-Run the perturbative spin-boson open-gate optimizer from the repository root:
+Run the YAML-driven optimizer from the repository root; the physical system is
+selected by `system.type` (see `physical_systems/`):
 
 ```bash
-.venv/bin/python experiments/spin_boson_perturbative_lbfgsb.py \
-  --maxiter 40 \
-  --n-steps 200 \
-  --workers 1
+.venv/bin/python -m experiments.run_experiment \
+  --config experiments/spin_boson/example.yaml
 ```
 
-Each run writes a timestamped directory under `experiments/outputs/`. The
-`report.md` file is created before optimization starts with a preview of the
-configuration, output paths, system construction script, noise terms, and
-`kappa_1`/`kappa_2` diagnostics. When optimization finishes or is interrupted,
-the final results are appended to the same report. Checkpoint files
-`latest_pulse.npz`, `latest_pulse.csv`, and `latest_parameters.npz` are updated
-during optimization.
+Each run writes a `<prefix>_<timestamp>` directory under the configured
+`output.output_root` (default `experiments/outputs/`; `output.prefix` defaults
+to the system name). The `report.md` file is created before optimization
+starts with a preview of the configuration, fluctuation terms, decoherence
+channels, and `kappa_1`/`kappa_2`/`kappa_3` diagnostics. When optimization
+finishes or is interrupted, the final results are appended to the same report.
+Checkpoint files `latest_pulse.npz`, `latest_pulse.csv`, and
+`latest_parameters.npz` are updated during optimization, and the fully
+resolved `config.yaml` snapshot reproduces the run when passed back via
+`--config`.
 
-Useful options:
+Useful flags (each overrides the YAML): `--maxiter`, `--n-steps`,
+`--l1-smooth-weight`, `--l2-smooth-weight`, `--workers`, `--print-step`,
+`--print-fidelity-terms`, `--initial-pulse-npz`, `--no-progress`,
+`--close-grape`, and the spin-boson `--gamma-*` decoherence rates.
 
-```text
---maxiter N                 L-BFGS-B iteration limit.
---n-steps N                 Number of piecewise-constant pulse slices.
---alpha1-cycles X           Initial alpha1 cosine cycles.
---l1-smooth-weight W        First-difference smoothness penalty.
---l2-smooth-weight W        Second-difference smoothness penalty.
---workers N                 Worker processes for state-pair averaging.
---print-step                Print per-step fidelity/objective diagnostics.
---print-fidelity-terms      Print and save perturbative fidelity terms.
---initial-pulse-npz PATH    Start from an exported pulse .npz.
---no-progress               Disable the progress bar.
-```
-
-Run an initial-condition sweep:
+Evaluate an exported pulse without optimizing:
 
 ```bash
-.venv/bin/python experiments/spin_boson_perturbative_initial_sweep.py \
-  --initial-mode all \
-  --n-runs 4 \
-  --seed 12345 \
-  --maxiter 40 \
-  --sweep-workers 2
+.venv/bin/python -m experiments.run_experiment evaluate \
+  --config experiments/spin_boson/example.yaml \
+  --pulse-npz <run_dir>/final_pulse.npz
 ```
 
-`--initial-mode` can be `noise`, `random`, `custom`, `both`, or `all`. Custom
-initial pulses can be supplied by repeating `--initial-pulse-npz PATH`; the
-loaded pulse must match the configured shape and keep the alpha2 endpoints at
-zero.
+System-specific configs and batch tooling live in a per-system folder such as
+`experiments/spin_boson/`: `example.yaml` documents every configuration key,
+`example2.yaml` shows the deterministic cosine/sine initial pulse,
+`make_initial_pulses.py` generates starting-pulse families, and
+`run_initial_pulses.py` evaluates or optimizes each of them.
 
 ## Averaging Multiple State Pairs
 
-`ExpansionStateAverageFidelity` evaluates the same perturbative objective over
+`StateAverageProblem` evaluates the same perturbative objective over
 multiple state pairs and returns the weighted average. This matches the
 state-pair averaging used by the open-gate fidelity notes while keeping each
 individual evolution as a single-state propagation.
 
 ```python
-from quantum_control import ExpansionStateAverageFidelity
+from quantum_control import StateAverageProblem
 
-averaged_problem = ExpansionStateAverageFidelity(
+averaged_problem = StateAverageProblem(
     system=system,
     pulse=pulse,
     evolution=evolution,
@@ -152,13 +148,15 @@ gradient = averaged_problem.gradient()
 The spin-boson helper builds the Hamiltonian
 `H(t) = alpha_1(t) I_spin ⊗ a†a + alpha_2(t) eta S_phi ⊗ X1`,
 where `X1 = (a† + a) / 2` and the default `eta = 0.075`. It is represented
-as a two-channel fluctuating closed system with two spin qubits. The spin term is
+as a two-channel system with two spin qubits (a `ClosedSystem`, or an
+`OpenSystem` when noise terms are attached). The spin term is
 `S_phi = b_1 sigma_phi ⊗ I + b_2 I ⊗ sigma_phi`; the default stretch-mode
 vector is `b = (1, -1) / 2`, and the COM-mode vector is `b = (1, 1) / 2`.
 The pulse array has shape `(n_steps, 2)`; column 0 is `alpha_1(t)` and column 1
 is `alpha_2(t)`.
-Optional `static_fluctuations` and `control_fluctuations` use the same
-already-scaled `sigma H` convention as `IonTrapRFSystem`. The pulse helper takes
+Optional `static_fluctuations` and `control_fluctuations` use the
+already-scaled `sigma H` convention (wrapped into unit-strength
+`FluctuationTerm`s on an `OpenSystem`). The pulse helper takes
 user-facing bounds in kHz and total time in microseconds, then stores amplitudes
 as angular frequencies in rad/s and `dt` in seconds.
 
@@ -173,6 +171,8 @@ from quantum_control import (
     ParameterizedControlProblem,
     StateTransferFidelity,
     UnitaryStepBuilder,
+)
+from physical_systems.spin_boson import (
     spin_boson_control_system,
     spin_boson_initial_pulse,
     spin_boson_parameterization,

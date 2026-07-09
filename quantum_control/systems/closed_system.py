@@ -5,11 +5,16 @@ from typing import Sequence
 
 import numpy as np
 
-from quantum_control.systems.base import ControlSystem
-
 
 @dataclass(frozen=True)
-class ClosedSystem(ControlSystem):
+class ClosedSystem:
+    """Nominal + control Hamiltonians only — the root of the system hierarchy.
+
+    ``H(t) = drift + sum_i controls_amplitude_i(t) * controls[i]``. A closed
+    system carries no noise model at all; systems with noise are represented
+    by ``OpenSystem``, which combines a closed system with ``NoiseTerm``s.
+    """
+
     drift: np.ndarray
     controls: Sequence[np.ndarray]
 
@@ -21,26 +26,3 @@ class ClosedSystem(ControlSystem):
 
     def control_hamiltonian(self, control_index, controls=None, t=None):
         return self.controls[control_index]
-
-
-@dataclass(frozen=True)
-class FluctuatingClosedSystem(ClosedSystem):
-    """Closed control system with long-correlation Hamiltonian fluctuations."""
-
-    static_fluctuations: Sequence[np.ndarray] = ()
-    control_fluctuations: Sequence[np.ndarray] = ()
-
-    def fluctuation_hamiltonian(self, controls, t=None):
-        if len(self.control_fluctuations) > len(controls):
-            raise ValueError("control_fluctuations cannot exceed the number of controls.")
-        hamiltonian = np.zeros_like(self.drift, dtype=complex)
-        for fluctuation_h in self.static_fluctuations:
-            hamiltonian = hamiltonian + fluctuation_h
-        for amplitude, fluctuation_h in zip(controls, self.control_fluctuations):
-            hamiltonian = hamiltonian + amplitude * fluctuation_h
-        return hamiltonian
-
-    def fluctuation_control_derivative(self, control_index, controls=None, t=None):
-        if control_index >= len(self.control_fluctuations):
-            return np.zeros_like(self.drift, dtype=complex)
-        return self.control_fluctuations[control_index]

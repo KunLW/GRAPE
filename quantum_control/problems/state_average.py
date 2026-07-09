@@ -6,7 +6,7 @@ from typing import Sequence
 
 import numpy as np
 
-from quantum_control.context import EvolutionContext
+from quantum_control.problems.context import EvolutionContext
 
 
 @dataclass(frozen=True)
@@ -24,27 +24,37 @@ def _context_for_pair(pair, compute_backward):
     )
 
 
-def _weighted_value_chunk(args):
-    system, pulse, evolution, objective, compute_backward, weighted_pairs = args
-    value = 0.0
-    for weight, pair in weighted_pairs:
-        result = evolution.evolve(system, pulse, _context_for_pair(pair, compute_backward))
-        value = value + weight * objective.evaluate(result)
-    return value
+def _evaluate_chunk(args):
+    """Weighted (value, gradient) over one chunk of state pairs.
 
-
-def _weighted_gradient_chunk(args):
-    system, pulse, evolution, differentiator, compute_backward, weighted_pairs = args
-    gradient = np.zeros_like(pulse.amplitudes)
+    ``mode`` is ``"value"``, ``"gradient"``, or ``"both"``; the unrequested
+    half is returned as ``None``. Each pair is evolved exactly once, so the
+    ``"both"`` mode shares the evolution between the objective and the
+    differentiator.
+    """
+    system, pulse, evolution, objective, differentiator, compute_backward, mode, weighted_pairs = args
+    value = 0.0 if mode != "gradient" else None
+    gradient = np.zeros_like(pulse.amplitudes) if mode != "value" else None
     for weight, pair in weighted_pairs:
         context = _context_for_pair(pair, compute_backward)
         result = evolution.evolve(system, pulse, context)
-        gradient = gradient + weight * differentiator.gradient(system, pulse, context, result)
-    return gradient
+        if value is not None:
+            value = value + weight * objective.evaluate(result)
+        if gradient is not None:
+            gradient = gradient + weight * differentiator.gradient(system, pulse, context, result)
+    return value, gradient
 
 
-class ExpansionStateAverageFidelity:
-    """Average a perturbative fidelity objective over multiple state pairs."""
+class StateAverageProblem:
+    """Weighted state-pair average of any evolution + objective.
+
+    Generic over the evolution/objective pair: the fluctuation expansion, the
+    Lindblad correction, and plain unitary propagation all run through it.
+    Exposes the pulse-space problem interface (``value`` / ``gradient`` /
+    ``value_and_gradient``); with ``n_workers > 1`` the pairs are averaged in
+    a process pool, whose lifetime is tied to the ``with`` statement (or an
+    explicit ``shutdown()``).
+    """
 
     def __init__(
         self,
@@ -75,7 +85,24 @@ class ExpansionStateAverageFidelity:
         self._weights = self._normalized_weights()
 
     def value(self, pulse=None):
-        pulse = pulse or self.pulse
+        value, _ = self._evaluate(pulse, "value")
+        return float(value)
+
+    def gradient(self, pulse=None):
+        _, gradient = self._evaluate(pulse, "gradient")
+        return gradient
+
+    def value_and_gradient(self, pulse=None):
+        """Both at once with a single evolution per state pair."""
+        value, gradient = self._evaluate(pulse, "both")
+        return float(value), gradient
+
+    def _evaluate(self, pulse, mode):
+        if mode != "value" and self.differentiator is None:
+            raise ValueError("A differentiator is required to compute gradients.")
+        if pulse is None:
+            pulse = self.pulse
+        weighted_pairs = tuple(zip(self._weights, self.state_pairs))
         if self.n_workers > 1:
             args = [
                 (
@@ -83,53 +110,41 @@ class ExpansionStateAverageFidelity:
                     pulse,
                     self.evolution,
                     self.objective,
-                    self.compute_backward,
-                    chunk,
-                )
-                for chunk in self._weighted_chunks()
-            ]
-            return float(np.sum(list(self._pool().map(_weighted_value_chunk, args))))
-
-        value = 0.0
-        for weight, pair in zip(self._weights, self.state_pairs):
-            result = self.evolution.evolve(self.system, pulse, self._context(pair))
-            value = value + weight * self.objective.evaluate(result)
-        return float(value)
-
-    def gradient(self, pulse=None):
-        if self.differentiator is None:
-            raise ValueError("A differentiator is required to compute gradients.")
-        pulse = pulse or self.pulse
-        if self.n_workers > 1:
-            args = [
-                (
-                    self.system,
-                    pulse,
-                    self.evolution,
                     self.differentiator,
                     self.compute_backward,
+                    mode,
                     chunk,
                 )
-                for chunk in self._weighted_chunks()
+                for chunk in self._chunks(weighted_pairs)
             ]
-            return np.sum(list(self._pool().map(_weighted_gradient_chunk, args)), axis=0)
-
-        gradient = np.zeros_like(pulse.amplitudes)
-        for weight, pair in zip(self._weights, self.state_pairs):
-            context = self._context(pair)
-            result = self.evolution.evolve(self.system, pulse, context)
-            gradient = gradient + weight * self.differentiator.gradient(
+            results = list(self._pool().map(_evaluate_chunk, args))
+            value = float(np.sum([v for v, _ in results])) if mode != "gradient" else None
+            gradient = np.sum([g for _, g in results], axis=0) if mode != "value" else None
+            return value, gradient
+        return _evaluate_chunk(
+            (
                 self.system,
                 pulse,
-                context,
-                result,
+                self.evolution,
+                self.objective,
+                self.differentiator,
+                self.compute_backward,
+                mode,
+                weighted_pairs,
             )
-        return gradient
+        )
 
     def shutdown(self):
         if self._executor is not None:
             self._executor.shutdown()
             self._executor = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.shutdown()
+        return False
 
     @staticmethod
     def _coerce_pair(pair):
@@ -154,11 +169,7 @@ class ExpansionStateAverageFidelity:
             weights = weights / total
         return tuple(weights)
 
-    def _context(self, pair):
-        return _context_for_pair(pair, self.compute_backward)
-
-    def _weighted_chunks(self):
-        weighted_pairs = tuple(zip(self._weights, self.state_pairs))
+    def _chunks(self, weighted_pairs):
         n_chunks = min(self.n_workers, len(weighted_pairs))
         chunks = np.array_split(np.asarray(weighted_pairs, dtype=object), n_chunks)
         return [tuple(chunk) for chunk in chunks if len(chunk)]
@@ -169,19 +180,25 @@ class ExpansionStateAverageFidelity:
         return self._executor
 
 
-class CombinedStateAverageProblem:
-    """Sum of state-average problems evaluated on the same pulse.
+class SumProblem:
+    """Sum of pulse-space problems evaluated on the same pulse.
 
     Used to add leading-order noise corrections from different channels, e.g.
     the fluctuation expansion fidelity plus the Lindblad decoherence
     correction (with ``include_closed=False`` so the closed term is counted
-    once).
+    once). The children must be built on the same pulse grid; this is
+    validated at construction.
     """
 
     def __init__(self, *problems):
         if not problems:
-            raise ValueError("CombinedStateAverageProblem requires at least one problem.")
+            raise ValueError("SumProblem requires at least one problem.")
         self.problems = tuple(problems)
+        reference = self.problems[0].pulse
+        for problem in self.problems[1:]:
+            pulse = problem.pulse
+            if pulse.amplitudes.shape != reference.amplitudes.shape or pulse.dt != reference.dt:
+                raise ValueError("SumProblem children must share the same pulse grid.")
 
     @property
     def pulse(self):
@@ -196,6 +213,21 @@ class CombinedStateAverageProblem:
             gradient = gradient + problem.gradient(pulse)
         return gradient
 
+    def value_and_gradient(self, pulse=None):
+        value, gradient = self.problems[0].value_and_gradient(pulse)
+        for problem in self.problems[1:]:
+            child_value, child_gradient = problem.value_and_gradient(pulse)
+            value = value + child_value
+            gradient = gradient + child_gradient
+        return float(value), gradient
+
     def shutdown(self):
         for problem in self.problems:
             problem.shutdown()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.shutdown()
+        return False
