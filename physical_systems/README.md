@@ -139,7 +139,7 @@ coherent kind is always called "fluctuation" and the Markovian kind
 
 ## Known debt
 
-- `experiments/make_initial_pulses.py` duplicates spin-boson
+- `experiments/spin_boson/make_initial_pulses.py` duplicates spin-boson
   constants (bounds, default total time, alpha2 endpoint convention)
   independently of the system definition; it is a standalone spin-boson
   utility.

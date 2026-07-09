@@ -1,7 +1,7 @@
 # Example experiment configuration for experiments/run_experiment.py.
 #
 # Run with:
-#   python -m experiments.run_experiment --config experiments/configs/example.yaml
+#   python -m experiments.run_experiment --config experiments/spin_boson/example.yaml
 #
 # Every value below equals the built-in default, so this file doubles as the
 # schema reference. Absent keys keep their defaults; unknown keys raise an
@@ -19,7 +19,7 @@ system:
     target_gate: ms_xx_pi_over_2  # registry name (physical_systems/spin_boson.py TARGET_GATES)
     alpha1_khz_bounds: [1.0, 60.0]   # control-amplitude bounds (kHz)
     alpha2_khz_bounds: [0.0, 200.0]
-    initial_pulse_shape: random # "random" or "cosine" (see configs/example2.yaml)
+    initial_pulse_shape: random # "random" or "cosine" (see spin_boson/example2.yaml)
     alpha1_cycles: 1.0          # cosine shape: alpha1 cycles across the pulse
     alpha1_offset_fraction: 0.7 # random shape: alpha1 = center + offset*scale + noise*scale*randn
     alpha1_noise_fraction: 0.3

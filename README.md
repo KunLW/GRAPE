@@ -84,7 +84,7 @@ selected by `system.type` (see `physical_systems/`):
 
 ```bash
 .venv/bin/python -m experiments.run_experiment \
-  --config experiments/configs/example.yaml
+  --config experiments/spin_boson/example.yaml
 ```
 
 Each run writes a `<prefix>_<timestamp>` directory under the configured
@@ -107,15 +107,15 @@ Evaluate an exported pulse without optimizing:
 
 ```bash
 .venv/bin/python -m experiments.run_experiment evaluate \
-  --config experiments/configs/example.yaml \
+  --config experiments/spin_boson/example.yaml \
   --pulse-npz <run_dir>/final_pulse.npz
 ```
 
-`experiments/configs/example.yaml` documents every configuration key;
-`experiments/configs/example2.yaml` shows the deterministic cosine/sine
-initial pulse. Batch tooling: `experiments/make_initial_pulses.py` generates
-starting-pulse families and `experiments/run_initial_pulses.py` evaluates or
-optimizes each of them.
+System-specific configs and batch tooling live in a per-system folder such as
+`experiments/spin_boson/`: `example.yaml` documents every configuration key,
+`example2.yaml` shows the deterministic cosine/sine initial pulse,
+`make_initial_pulses.py` generates starting-pulse families, and
+`run_initial_pulses.py` evaluates or optimizes each of them.
 
 ## Averaging Multiple State Pairs
 

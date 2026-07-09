@@ -14,7 +14,7 @@ Always use the repo's virtualenv, not system Python: `.venv/bin/python` (when wo
 .venv/bin/python -m pytest tests/test_quantum_control.py::test_name  # or -k pattern
 
 # Modern YAML-driven optimization run
-.venv/bin/python -m experiments.run_experiment --config experiments/configs/example.yaml
+.venv/bin/python -m experiments.run_experiment --config experiments/spin_boson/example.yaml
 
 # Evaluate an exported pulse without optimizing
 .venv/bin/python -m experiments.run_experiment evaluate --config <cfg.yaml> --pulse-npz <pulse.npz>
