@@ -6,14 +6,14 @@ from pathlib import Path
 
 import numpy as np
 
-from quantum_control.context import EvolutionContext
+from quantum_control.problems.context import EvolutionContext
 from quantum_control.differentiators.expansion_differentiator import (
     PerturbativeExpansionDifferentiator,
 )
 from quantum_control.evolution.expansion_evolution import PerturbativeExpansionEvolution
 from quantum_control.objectives.expansion_fidelity import ExpansionFidelity
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
-from quantum_control.state_average import StatePair
+from quantum_control.problems.state_average import StatePair
 from quantum_control.steps.perturbative_step import PerturbativeStepBuilder
 
 

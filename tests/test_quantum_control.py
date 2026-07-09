@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 
@@ -23,36 +22,40 @@ from experiments.reporting import (
     write_step_log_csv,
     write_experiment_report,
 )
-from experiments.spin_boson_perturbative_initial_sweep import (
-    build_sweep_run_specs,
-    load_custom_initial_parameters,
-    noise_initial_parameters,
-    random_initial_parameters,
-    reference_pulse_and_parameterization,
-    write_summary_csv,
-    write_summary_markdown,
-)
-from experiments.spin_boson_perturbative_lbfgsb import (
-    calculate_kappa_metrics,
-    load_custom_initial_parameters as load_single_custom_initial_parameters,
-    run_perturbative_experiment,
-    spin_boson_noise_term_specs,
-    spin_boson_noisy_control_system,
-)
-from quantum_control import (
-    ControlProblem,
+from physical_systems.spin_boson import (
+    ms_xx_pi_over_2_gate,
+    single_qubit_logical_test_states,
+    two_qubit_logical_test_states,
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
+    annihilation_operator,
+    creation_operator,
+    motion_resolved_gate_state_pairs,
+    number_operator,
+    spin_boson_collapse_operators,
+    spin_boson_control_system,
+    spin_boson_initial_pulse,
+    spin_boson_parameterization,
+    spin_phase_operator,
+    two_qubit_spin_phase_difference,
+    two_qubit_spin_phase_mode,
+)
+from quantum_control import (
+    ClosedSystem,
+    SumProblem,
+    ControlProblem,
+    faithful_gate_fidelity,
+    DecoherenceChannel,
     EvolutionContext,
     ExpansionFidelity,
-    ExpansionStateAverageFidelity,
+    StateAverageProblem,
     GrapeDifferentiator,
-    IonTrapRFSystem,
+    FluctuationTerm,
     LindbladCorrectedStateFidelity,
     LindbladExpansionDifferentiator,
     LindbladExpansionEvolution,
-    LindbladOpenSystem,
+    OpenSystem,
     NominalUnitaryEvolution,
     ParameterSmoothPenalty,
     ParameterizedControlProblem,
@@ -65,25 +68,12 @@ from quantum_control import (
     StateTransferFidelity,
     StatePair,
     UnitaryStepBuilder,
-    annihilation_operator,
     closed_gate_fidelity,
-    creation_operator,
     endpoint_masked_parameterization,
-    motion_resolved_gate_state_pairs,
-    ms_xx_pi_over_2_gate,
-    number_operator,
-    open_gate_fidelity,
-    single_qubit_logical_test_states,
-    spin_boson_collapse_operators,
-    spin_boson_control_system,
-    spin_boson_initial_pulse,
-    spin_boson_parameterization,
-    spin_phase_operator,
-    two_qubit_spin_phase_mode,
-    two_qubit_spin_phase_difference,
-    two_qubit_logical_test_states,
+    noisy_gate_fidelity,
 )
 from quantum_control.differentiators.finite_difference import FiniteDifferenceDifferentiator
+from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.diagnostics.error_budget import (
     ErrorBudgetConfig,
     evaluate_error_budget,
@@ -380,465 +370,29 @@ def test_load_pulse_npz_uses_dt_or_fallback(tmp_path):
         load_pulse_npz(without_dt)
 
 
-def test_sweep_noise_initial_parameters_are_reproducible_and_clipped():
-    base = np.zeros((4, 2), dtype=float)
-
-    first = noise_initial_parameters(base, np.random.default_rng(123), 0.3)
-    second = noise_initial_parameters(base, np.random.default_rng(123), 0.3)
-    clipped = noise_initial_parameters(np.full((4, 2), 0.95), np.random.default_rng(1), 10.0)
-
-    assert np.allclose(first, second)
-    assert np.all(clipped >= -1.0)
-    assert np.all(clipped <= 1.0)
-
-
-def test_sweep_random_initial_parameters_respect_bounds_and_endpoint_mask():
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-
-    parameters = random_initial_parameters(reference_pulse.amplitudes.shape, np.random.default_rng(5))
-    pulse = PiecewiseConstantPulse(parameterization.to_physical(parameters), reference_pulse.dt)
-
-    assert np.all(parameters >= -1.0)
-    assert np.all(parameters <= 1.0)
-    assert np.allclose(pulse.amplitudes[[0, -1], 1], 0.0)
-
-
-def test_sweep_custom_npz_imports_pulse_and_records_matching_dt(tmp_path):
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-    compatible_amplitudes = parameterization.to_physical(
-        parameterization.to_parameters(reference_pulse.amplitudes)
-    )
-    npz_path = tmp_path / "pulse.npz"
-    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=reference_pulse.dt)
-
-    parameters, metadata = load_custom_initial_parameters(
-        npz_path,
-        reference_pulse,
-        parameterization,
-    )
-
-    assert np.allclose(parameterization.to_physical(parameters), compatible_amplitudes)
-    assert metadata["source_dt"] == reference_pulse.dt
-    assert metadata["dt_missing"] is False
-    assert metadata["dt_mismatch"] is False
-    assert metadata["warnings"] == []
-
-
-def test_sweep_custom_npz_missing_dt_continues_with_warning(tmp_path):
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-    compatible_amplitudes = parameterization.to_physical(
-        parameterization.to_parameters(reference_pulse.amplitudes)
-    )
-    npz_path = tmp_path / "pulse_missing_dt.npz"
-    np.savez(npz_path, amplitudes=compatible_amplitudes)
-
-    _parameters, metadata = load_custom_initial_parameters(
-        npz_path,
-        reference_pulse,
-        parameterization,
-    )
-
-    assert metadata["source_dt"] == "NA"
-    assert metadata["dt_missing"] is True
-    assert metadata["dt_mismatch"] is False
-    assert "has no dt" in metadata["warnings"][0]
-
-
-def test_sweep_custom_npz_mismatched_dt_continues_with_warning(tmp_path):
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-    compatible_amplitudes = parameterization.to_physical(
-        parameterization.to_parameters(reference_pulse.amplitudes)
-    )
-    npz_path = tmp_path / "pulse_mismatched_dt.npz"
-    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=2.0 * reference_pulse.dt)
-
-    _parameters, metadata = load_custom_initial_parameters(
-        npz_path,
-        reference_pulse,
-        parameterization,
-    )
-
-    assert metadata["source_dt"] == 2.0 * reference_pulse.dt
-    assert metadata["dt_missing"] is False
-    assert metadata["dt_mismatch"] is True
-    assert "differs from experiment" in metadata["warnings"][0]
-
-
-def test_single_perturbative_experiment_custom_npz_loader_allows_mismatched_dt(tmp_path):
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-    compatible_amplitudes = parameterization.to_physical(
-        parameterization.to_parameters(reference_pulse.amplitudes)
-    )
-    npz_path = tmp_path / "single_pulse.npz"
-    np.savez(npz_path, amplitudes=compatible_amplitudes, dt=2.0 * reference_pulse.dt)
-
-    parameters, metadata = load_single_custom_initial_parameters(
-        npz_path,
-        reference_pulse,
-        parameterization,
-    )
-
-    assert np.allclose(parameterization.to_physical(parameters), compatible_amplitudes)
-    assert metadata["dt_mismatch"] is True
-    assert metadata["dt_missing"] is False
-
-
-def test_perturbative_experiment_writes_latest_checkpoint_outputs(tmp_path):
-    args = SimpleNamespace(
-        maxiter=1,
-        n_steps=5,
-        alpha1_cycles=1.0,
-        l1_smooth_weight=0.0,
-        l2_smooth_weight=0.0,
-        workers=1,
-        print_step=False,
-        print_fidelity_terms=False,
-        initial_pulse_npz=None,
-        no_progress=True,
-    )
-
-    result = run_perturbative_experiment(
-        args,
-        experiment_dir=tmp_path / "run",
-        print_report=False,
-    )
-
-    outputs = result["outputs"]
-    assert outputs["latest_pulse_npz"].exists()
-    assert outputs["latest_pulse_csv"].exists()
-    assert outputs["latest_parameters"].exists()
-    data = np.load(outputs["latest_parameters"])
-    assert int(data["step"]) >= 0
-    report = result["report_path"].read_text(encoding="utf-8")
-    assert "| latest_pulse_npz | latest_pulse.npz |" in report
-    assert "| latest_parameters | latest_parameters.npz |" in report
-    assert "## Preview" in report
-    assert "## Noise Terms" in report
-    assert "## System Construction Script" in report
-    assert "### Kappa Diagnostics" in report
-    assert "kappa_1" in report
-    assert "kappa_2" in report
-    assert "max_boundary_corner" in report
-    assert "over alpha bounds" in report
-    assert "H_nominal(alpha)" in report
-    assert "H_fluctuation(alpha)" in report
-    assert "kappa_boundary_corner_count" in report
-    assert "static[0]" in report
-    assert "314.159" in report
-    assert "kron(0.5 * (sz ⊗ I + I ⊗ sz), I_motion)" in report
-    assert "static[1]" in report
-    assert "1256.637" in report
-    assert "kron(I_spin, number_operator)" in report
-    assert "control[0]" in report
-    assert "0.0003" in report
-    assert "alpha1(t) * control[0]" in report
-    assert "control[1]" in report
-    assert "0.0006" in report
-    assert "eta * kron(S_phi(mode=(0.5, -0.5)), X1)" in report
-    assert "eta=0.075" in report
-    assert "alpha2(t) * control[1]" in report
-    assert "## Results" in report
-    assert report.index("## Preview") < report.index("## Results")
-
-
-def test_perturbative_experiment_prints_kappa_when_step_printing_enabled(tmp_path, capsys):
-    args = SimpleNamespace(
-        maxiter=5,
-        n_steps=5,
-        alpha1_cycles=1.0,
-        l1_smooth_weight=0.0,
-        l2_smooth_weight=0.0,
-        workers=1,
-        print_step=True,
-        print_fidelity_terms=False,
-        initial_pulse_npz=None,
-        no_progress=True,
-    )
-
-    with patch(
-        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
-        side_effect=KeyboardInterrupt,
-    ):
-        run_perturbative_experiment(
-            args,
-            experiment_dir=tmp_path / "print_kappa",
-            print_report=False,
-        )
-
-    output = capsys.readouterr().out
-    assert "=== Optimization Preview ===" in output
-    assert "[Kappa Diagnostics]" in output
-    assert "kappa_1" in output
-    assert "kappa_2" in output
-    assert "kappa_1_corner" in output
-    assert "kappa_2_corner" in output
-
-
-def test_spin_boson_noise_specs_drive_noisy_system_terms():
-    specs = spin_boson_noise_term_specs(n_levels=3, phi_s=0.0)
-    noisy_system = spin_boson_noisy_control_system(n_levels=3, phi_s=0.0)
-    matrices = tuple(noisy_system.static_fluctuations) + tuple(noisy_system.control_fluctuations)
-
-    assert [spec["name"] for spec in specs] == ["static[0]", "static[1]", "control[0]", "control[1]"]
-    assert [spec["coefficient"] for spec in specs] == [314.159, 1256.637, 0.0003, 0.0006]
-    for spec, matrix in zip(specs, matrices, strict=True):
-        assert np.allclose(spec["matrix"], spec["coefficient"] * spec["operator"])
-        assert np.allclose(spec["matrix"], matrix)
-
-
-def test_kappa_metrics_use_alpha_bounds_corners_not_initial_pulse_samples():
-    class ToySystem:
-        def nominal_hamiltonian(self, controls):
-            return np.array([[controls[0] + 2.0 * controls[1]]], dtype=complex)
-
-    class ToyNoisySystem:
-        def fluctuation_hamiltonian(self, controls):
-            return np.array([[5.0 * controls[0] - controls[1]]], dtype=complex)
-
-    class ToyBaseParameterization:
-        def _bounds_for(self, shape):
-            return (
-                np.tile(np.array([-1.0, -2.0]), (shape[0], 1)),
-                np.tile(np.array([3.0, 4.0]), (shape[0], 1)),
-            )
-
-    pulse = PiecewiseConstantPulse(
-        amplitudes=np.array([[0.0, 0.0], [0.5, 0.5]], dtype=float),
-        dt=0.1,
-    )
-    parameterization = SimpleNamespace(base=ToyBaseParameterization())
-
-    metrics = calculate_kappa_metrics(ToySystem(), ToyNoisySystem(), pulse, parameterization)
-
-    assert metrics["boundary_corner_count"] == 4
-    assert np.isclose(metrics["kappa_1"], 1.1)
-    assert np.isclose(metrics["kappa_2"], 3.4)
-    assert metrics["kappa_1_alpha"] == (3.0, 4.0)
-    assert metrics["kappa_2_alpha"] == (3.0, -2.0)
-
-
-def test_perturbative_experiment_writes_preview_before_optimizer(tmp_path):
-    args = SimpleNamespace(
-        maxiter=5,
-        n_steps=5,
-        alpha1_cycles=1.0,
-        l1_smooth_weight=0.0,
-        l2_smooth_weight=0.0,
-        workers=1,
-        print_step=False,
-        print_fidelity_terms=False,
-        initial_pulse_npz=None,
-        no_progress=True,
-    )
-    report_path = tmp_path / "preview_before_optimizer" / "report.md"
-
-    def assert_preview_written(*_args, **_kwargs):
-        assert report_path.exists()
-        markdown = report_path.read_text(encoding="utf-8")
-        assert "## Preview" in markdown
-        assert "## Noise Terms" in markdown
-        assert "## System Construction Script" in markdown
-        assert "_Optimization has not completed yet. Final results will be appended here._" in markdown
-        raise KeyboardInterrupt
-
-    with patch(
-        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
-        side_effect=assert_preview_written,
-    ):
-        result = run_perturbative_experiment(
-            args,
-            experiment_dir=tmp_path / "preview_before_optimizer",
-            print_report=False,
-        )
-
-    report = result["report_path"].read_text(encoding="utf-8")
-    assert result["interrupted"] is True
-    assert "_Optimization has not completed yet" not in report
-    assert "## Results" in report
-    assert report.index("## Preview") < report.index("## Results")
-
-
-def test_perturbative_experiment_writes_fidelity_term_diagnostics(tmp_path):
-    args = SimpleNamespace(
-        maxiter=1,
-        n_steps=5,
-        alpha1_cycles=1.0,
-        l1_smooth_weight=0.0,
-        l2_smooth_weight=0.0,
-        workers=1,
-        print_step=False,
-        print_fidelity_terms=False,
-        save_fidelity_terms=True,
-        initial_pulse_npz=None,
-        no_progress=True,
-    )
-
-    result = run_perturbative_experiment(
-        args,
-        experiment_dir=tmp_path / "diagnostic_run",
-        print_report=False,
-    )
-
-    outputs = result["outputs"]
-    assert outputs["fidelity_terms"].exists()
-    assert outputs["fidelity_terms_by_pair"].exists()
-    summary_lines = outputs["fidelity_terms"].read_text(encoding="utf-8").splitlines()
-    pair_lines = outputs["fidelity_terms_by_pair"].read_text(encoding="utf-8").splitlines()
-    assert summary_lines[0].startswith("step,closed_term,first_order_sq")
-    assert "dropped_order1_cross" in pair_lines[0]
-    assert len(summary_lines) >= 2
-    assert len(pair_lines) > len(summary_lines)
-    report = result["report_path"].read_text(encoding="utf-8")
-    assert "| fidelity_terms | fidelity_terms.csv |" in report
-    assert "| fidelity_terms_by_pair | fidelity_terms_by_pair.csv |" in report
-
-
-def test_perturbative_experiment_interrupt_uses_latest_pulse_for_report(tmp_path):
-    args = SimpleNamespace(
-        maxiter=5,
-        n_steps=5,
-        alpha1_cycles=1.0,
-        l1_smooth_weight=0.0,
-        l2_smooth_weight=0.0,
-        workers=1,
-        print_step=False,
-        print_fidelity_terms=False,
-        initial_pulse_npz=None,
-        no_progress=True,
-    )
-
-    with patch(
-        "experiments.spin_boson_perturbative_lbfgsb.ScipyOptimizer.optimize_parameters",
-        side_effect=KeyboardInterrupt,
-    ):
-        result = run_perturbative_experiment(
-            args,
-            experiment_dir=tmp_path / "interrupted_run",
-            print_report=False,
-        )
-
-    assert result["interrupted"] is True
-    assert result["result"].success is False
-    assert "INTERRUPTED" in result["result"].message
-    assert result["outputs"]["final_pulse_npz"].exists()
-    assert result["outputs"]["final_pulse_csv"].exists()
-    assert result["report_path"].exists()
-    report = result["report_path"].read_text(encoding="utf-8")
-    assert "| interrupted | True |" in report
-
-
-def test_sweep_custom_npz_rejects_incompatible_shape_endpoint_and_bounds(tmp_path):
-    reference_pulse, parameterization = reference_pulse_and_parameterization(
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-    bad_shape = tmp_path / "bad_shape.npz"
-    bad_endpoint = tmp_path / "bad_endpoint.npz"
-    bad_bounds = tmp_path / "bad_bounds.npz"
-    np.savez(bad_shape, amplitudes=reference_pulse.amplitudes[:-1], dt=reference_pulse.dt)
-    endpoint_amplitudes = np.array(reference_pulse.amplitudes, copy=True)
-    endpoint_amplitudes[0, 1] = 1.0
-    np.savez(bad_endpoint, amplitudes=endpoint_amplitudes, dt=reference_pulse.dt)
-    bounds_amplitudes = np.array(reference_pulse.amplitudes, copy=True)
-    bounds_amplitudes[1, 0] = 1e12
-    np.savez(bad_bounds, amplitudes=bounds_amplitudes, dt=reference_pulse.dt)
-
-    for path, message in [
-        (bad_shape, "shape"),
-        (bad_endpoint, "endpoints"),
-        (bad_bounds, "bounds"),
-    ]:
-        try:
-            load_custom_initial_parameters(path, reference_pulse, parameterization)
-        except ValueError as exc:
-            assert message in str(exc)
-        else:
-            raise AssertionError(f"Expected {path} to be rejected.")
-
-
-def test_sweep_summary_writers_include_expected_columns_and_paths(tmp_path):
-    rows = [
-        {
-            "mode": "custom",
-            "run_index": 1,
-            "seed": "NA",
-            "source_npz": "pulse.npz",
-            "source_dt": "NA",
-            "experiment_dt": 0.1,
-            "dt_missing": True,
-            "dt_mismatch": False,
-            "success": True,
-            "nit": 1,
-            "nfev": 2,
-            "initial_open_gate_fidelity": 0.1,
-            "final_open_gate_fidelity": 0.3,
-            "initial_close_gate_fidelity": 0.2,
-            "final_close_gate_fidelity": 0.4,
-            "initial_cost": 0.05,
-            "final_cost": 0.25,
-            "initial_l1_penalty": 0.0,
-            "final_l1_penalty": 0.01,
-            "initial_l2_penalty": 0.0,
-            "final_l2_penalty": 0.02,
-            "experiment_dir": tmp_path / "run",
-        }
+def open_system_from_matrices(
+    drift, controls, static_fluctuations=(), control_fluctuations=(), collapse_operators=()
+):
+    """Wrap pre-scaled matrices into unit-strength noise terms on an OpenSystem."""
+    noise_terms = [
+        FluctuationTerm(name=f"static[{i}]", operator=m, definition="", coefficient=1.0, kind="static")
+        for i, m in enumerate(static_fluctuations)
     ]
-
-    write_summary_csv(tmp_path / "summary.csv", rows)
-    write_summary_markdown(tmp_path / "summary.md", rows)
-
-    csv_lines = (tmp_path / "summary.csv").read_text(encoding="utf-8").splitlines()
-    markdown = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert csv_lines[0].startswith("mode,run_index,seed,source_npz,source_dt")
-    assert "pulse.npz" in csv_lines[1]
-    assert "Top Runs by Final Cost" in markdown
-    assert "| mode | run_index | seed | final_cost | final_open_gate_fidelity | experiment_dir |" in markdown
-    assert str(tmp_path / "run") in markdown
-
-
-def test_sweep_run_specs_include_both_modes_with_deterministic_labels(tmp_path):
-    args = SimpleNamespace(
-        initial_mode="both",
-        n_runs=2,
-        seed=10,
-        noise_scale=0.3,
-        initial_pulse_npz=[],
-        n_steps=5,
-        alpha1_cycles=1.0,
-    )
-
-    specs = build_sweep_run_specs(args, tmp_path, datetime(2026, 6, 22, 12, 0, 0))
-
-    assert [spec["label"] for spec in specs] == [
-        "noise_seed_10",
-        "noise_seed_11",
-        "random_seed_12",
-        "random_seed_13",
+    noise_terms += [
+        FluctuationTerm(name=f"control[{i}]", operator=m, definition="", coefficient=1.0, kind="control")
+        for i, m in enumerate(control_fluctuations)
     ]
-    assert [spec["run_index"] for spec in specs] == [1, 2, 3, 4]
-    assert [spec["mode"] for spec in specs] == ["noise", "noise", "random", "random"]
-    assert all(spec["experiment_dir"].parent == tmp_path for spec in specs)
+    noise_terms += [
+        DecoherenceChannel(name=f"collapse[{i}]", operator=op, definition="", rate=1.0)
+        for i, op in enumerate(collapse_operators)
+    ]
+    return OpenSystem(drift=drift, controls=controls, noise_terms=tuple(noise_terms))
 
 
 def two_level_problem(amplitudes, initial_state=None, target_state=None):
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.1 * sz,
         controls=[sx],
         static_fluctuations=[0.01 * sz],
@@ -1000,7 +554,7 @@ def test_motion_resolved_gate_state_pairs_use_spin_motion_ordering_and_weights()
     assert np.allclose(first_pair.weight, 1.0 / 16.0)
 
 
-def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
+def test_zero_fluctuation_noisy_gate_fidelity_matches_closed_gate_fidelity():
     n_levels = 2
     system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
     pulse = PiecewiseConstantPulse(
@@ -1009,10 +563,227 @@ def test_zero_fluctuation_open_gate_fidelity_matches_closed_gate_fidelity():
     )
     target_gate = ms_xx_pi_over_2_gate()
 
-    closed = closed_gate_fidelity(system, pulse, target_gate, n_levels)
-    opened = open_gate_fidelity(system, pulse, target_gate, n_levels)
+    state_pairs = motion_resolved_gate_state_pairs(target_gate, n_levels)
+    closed = closed_gate_fidelity(system, pulse, state_pairs)
+    noisy = noisy_gate_fidelity(system, pulse, state_pairs)
 
-    assert np.allclose(opened, closed)
+    assert np.allclose(noisy, closed)
+
+
+def test_noisy_gate_fidelity_includes_decoherence_correction():
+    n_levels = 2
+    system = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    pulse = PiecewiseConstantPulse(
+        np.array([[0.02, 0.01], [0.025, 0.015]], dtype=float),
+        dt=0.005,
+    )
+    state_pairs = motion_resolved_gate_state_pairs(ms_xx_pi_over_2_gate(), n_levels)
+    collapse_operators = spin_boson_collapse_operators(
+        n_levels=n_levels,
+        gamma_heating=0.5,
+        gamma_motional_dephasing=0.2,
+        gamma_spin_dephasing=0.1,
+    )
+
+    without = noisy_gate_fidelity(system, pulse, state_pairs)
+    with_decoherence = noisy_gate_fidelity(
+        system, pulse, state_pairs, collapse_operators=collapse_operators
+    )
+
+    assert with_decoherence < without
+
+
+def test_open_grape_optimization_improves_noisy_gate_fidelity():
+    """Open-system GRAPE end-to-end: optimize the combined objective
+    (fluctuation expansion + Lindblad correction) on an ``OpenSystem`` built
+    from declarative noise terms, and verify against ``noisy_gate_fidelity``.
+    """
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)
+    system = OpenSystem(
+        drift=np.zeros((2, 2), dtype=complex),
+        controls=[sx],
+        noise_terms=[
+            FluctuationTerm(
+                name="dephasing", operator=sz, definition="sigma_z",
+                coefficient=0.01, kind="static",
+            ),
+            DecoherenceChannel(
+                name="decay", operator=sigma_minus, definition="sigma_minus",
+                rate=0.02,
+            ),
+        ],
+    )
+    pulse = PiecewiseConstantPulse(np.full((8, 1), 2.0), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+
+    step_builder = PerturbativeStepBuilder()
+    expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
+    expansion_problem = StateAverageProblem(
+        system=system,
+        pulse=pulse,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=expansion_objective,
+        differentiator=PerturbativeExpansionDifferentiator(step_builder, expansion_objective),
+        state_pairs=state_pairs,
+        normalize_weights=False,
+    )
+    unitary_builder = UnitaryStepBuilder()
+    decoherence_problem = StateAverageProblem(
+        system=system,
+        pulse=pulse,
+        evolution=LindbladExpansionEvolution(
+            unitary_builder, collapse_operators=system.collapse_operators
+        ),
+        objective=LindbladCorrectedStateFidelity(include_closed=False),
+        differentiator=LindbladExpansionDifferentiator(unitary_builder, include_closed=False),
+        state_pairs=state_pairs,
+        normalize_weights=False,
+    )
+    with SumProblem(expansion_problem, decoherence_problem) as problem:
+        initial = noisy_gate_fidelity(
+            system, pulse, state_pairs, collapse_operators=system.collapse_operators
+        )
+        # The optimizer objective is exactly the reported noisy gate fidelity.
+        assert np.allclose(problem.value(pulse), initial)
+
+        optimizer = ScipyOptimizer(method="L-BFGS-B", maximize=True, options={"maxiter": 40})
+        result = optimizer.optimize(problem)
+        final_pulse = result.optimized_pulse
+        final = noisy_gate_fidelity(
+            system, final_pulse, state_pairs, collapse_operators=system.collapse_operators
+        )
+
+    assert final > initial
+    assert final > 0.95
+
+
+def test_faithful_gate_fidelity_matches_closed_fidelity_without_noise():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    system = ClosedSystem(drift=0.1 * sz, controls=[sx])
+    pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 0.6), StatePair(one, zero, 0.4))
+
+    faithful = faithful_gate_fidelity(system, pulse, state_pairs)
+    closed = closed_gate_fidelity(system, pulse, state_pairs)
+
+    assert np.allclose(faithful, closed, atol=1e-10)
+
+
+def test_faithful_gate_fidelity_matches_exact_lindblad_oracle():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)
+    gamma = 0.05
+    system = open_system_from_matrices(
+        drift=0.1 * sz,
+        controls=[sx],
+        collapse_operators=(np.sqrt(gamma) * sigma_minus,),
+    )
+    pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+
+    faithful = faithful_gate_fidelity(system, pulse, state_pairs)
+    rho_final = exact_lindblad_final_state(system, pulse, zero)
+    oracle = float(np.real(one.conj() @ rho_final @ one))
+    assert np.allclose(faithful, oracle, atol=1e-12)
+
+    # small kappa_3: the perturbative metric agrees to first order
+    perturbative = noisy_gate_fidelity(
+        system, pulse, state_pairs, collapse_operators=system.collapse_operators
+    )
+    kappa_3 = pulse.n_steps * pulse.dt * gamma
+    assert abs(faithful - perturbative) < kappa_3**2
+
+
+def test_faithful_gate_fidelity_matches_perturbative_for_small_fluctuations():
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    sigma = 0.05
+    system = OpenSystem(
+        drift=np.zeros((2, 2), dtype=complex),
+        controls=[sx],
+        noise_terms=[
+            FluctuationTerm(
+                name="dephasing", operator=sz, definition="sigma_z",
+                coefficient=sigma, kind="static",
+            ),
+        ],
+    )
+    zero = np.array([1.0, 0.0], dtype=complex)
+    one = np.array([0.0, 1.0], dtype=complex)
+    state_pairs = (StatePair(zero, one, 1.0),)
+    # same physical pulse at two step resolutions (total time 0.3 both ways)
+    coarse_pulse = PiecewiseConstantPulse(np.full((6, 1), 2.5), dt=0.05)
+    fine_pulse = PiecewiseConstantPulse(np.full((96, 1), 2.5), dt=0.003125)
+
+    faithful = faithful_gate_fidelity(system, fine_pulse, state_pairs, hermite_points=9)
+    perturbative = noisy_gate_fidelity(system, fine_pulse, state_pairs)
+    closed = closed_gate_fidelity(system, fine_pulse, state_pairs)
+
+    # the fluctuation correction is real and the faithful average captures it
+    correction = abs(closed - faithful)
+    assert correction > 1e-5
+    # at fine dt the second-order expansion reproduces >90% of the correction
+    assert abs(faithful - perturbative) < 0.1 * correction
+    # the faithful value is dt-exact; the perturbative metric converges to it
+    coarse_gap = abs(
+        faithful_gate_fidelity(system, coarse_pulse, state_pairs, hermite_points=9)
+        - noisy_gate_fidelity(system, coarse_pulse, state_pairs)
+    )
+    assert abs(faithful - perturbative) < coarse_gap / 4
+    # quadrature is converged: more nodes do not move the value
+    refined = faithful_gate_fidelity(system, fine_pulse, state_pairs, hermite_points=15)
+    assert np.allclose(faithful, refined, atol=1e-9)
+
+
+def test_value_and_gradient_matches_separate_calls_bitwise(tmp_path):
+    """The fused evaluation must be numerically identical to separate calls
+    through the full driver stack (SumProblem -> parameterized -> penalized),
+    so switching the optimizer to jac=True cannot change any trajectory."""
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 2",
+                "  noise:",
+                "    decoherence:",
+                "      enabled: true",
+                "      gamma_heating: 0.5",
+                "pulse:",
+                "  n_steps: 4",
+                "  random_seed: 7",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    _system, open_system = sbo.build_systems(config)
+    initial_pulse = sbo.build_initial_pulse(config)
+    parameterization = sbo.build_parameterization(config, initial_pulse)
+    state_pairs = sbo.build_state_pairs(config)
+    with sbo.build_objective_problem(config, open_system, initial_pulse, state_pairs) as problem:
+        assert isinstance(problem, SumProblem)
+        penalized = PenalizedParameterizedProblem(
+            ParameterizedControlProblem(problem, parameterization),
+            ParameterSmoothPenalty(l1_weight=5e-4, l2_weight=1e-4),
+        )
+        parameters = penalized.initial_parameters().reshape(-1)
+
+        fused_value, fused_gradient = penalized.value_and_gradient(parameters)
+
+        assert fused_value == penalized.value(parameters)
+        assert np.array_equal(fused_gradient, penalized.gradient(parameters))
 
 
 def test_spin_boson_initial_pulse_uses_standard_units_and_full_alpha1_cycle():
@@ -1326,11 +1097,11 @@ def test_expansion_evolution_returns_ordered_components():
     assert result.forward[-1].components[0].shape == (2,)
 
 
-def test_ion_trap_fluctuation_hamiltonian_matches_noise_formula():
+def test_open_system_fluctuation_hamiltonian_matches_noise_formula():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sy = np.array([[0, -1j], [1j, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=np.zeros((2, 2), dtype=complex),
         controls=[sx, sy],
         static_fluctuations=[0.01 * sz, 0.02 * sx],
@@ -1395,7 +1166,7 @@ def test_perturbative_gradient_frechet_dv_derivative_matches_finite_difference()
 
 def test_perturbative_v_method_leading_matches_default_and_frechet_commuting_case():
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.2 * sz,
         controls=[0.3 * sz],
         static_fluctuations=[0.01 * sz],
@@ -1414,7 +1185,7 @@ def test_perturbative_v_method_leading_matches_default_and_frechet_commuting_cas
 def test_perturbative_v_method_frechet_is_finite_for_noncommuting_case():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(
+    system = open_system_from_matrices(
         drift=0.2 * sz,
         controls=[sx],
         static_fluctuations=[0.03 * sx],
@@ -1431,7 +1202,7 @@ def test_perturbative_v_method_frechet_is_finite_for_noncommuting_case():
 def test_state_average_fidelity_matches_single_state_problem_for_one_pair():
     amplitudes = np.array([[0.2], [0.25], [0.15]])
     problem = two_level_problem(amplitudes)
-    averaged = ExpansionStateAverageFidelity(
+    averaged = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1502,16 +1273,18 @@ def test_error_budget_cli_smoke_test(tmp_path):
         "\n".join(
             [
                 "import numpy as np",
-                "from quantum_control import IonTrapRFSystem, StatePair",
+                "from quantum_control import FluctuationTerm, OpenSystem, StatePair",
                 "",
                 "def build():",
                 "    sx = np.array([[0, 1], [1, 0]], dtype=complex)",
                 "    sz = np.array([[1, 0], [0, -1]], dtype=complex)",
-                "    system = IonTrapRFSystem(",
+                "    system = OpenSystem(",
                 "        drift=0.1 * sz,",
                 "        controls=[sx],",
-                "        static_fluctuations=[0.01 * sz],",
-                "        control_fluctuations=[0.02 * sx],",
+                "        noise_terms=[",
+                "            FluctuationTerm(name='s', operator=0.01 * sz, definition='', coefficient=1.0, kind='static'),",
+                "            FluctuationTerm(name='c', operator=0.02 * sx, definition='', coefficient=1.0, kind='control'),",
+                "        ],",
                 "    )",
                 "    pair = StatePair(",
                 "        np.array([1.0, 0.0], dtype=complex),",
@@ -1557,7 +1330,7 @@ def test_state_average_fidelity_uses_weighted_value_and_gradient_average():
     target_zero = np.array([1.0, 0.0], dtype=complex)
     problem_one = two_level_problem(amplitudes, initial_state=initial, target_state=target_one)
     problem_zero = two_level_problem(amplitudes, initial_state=initial, target_state=target_zero)
-    averaged = ExpansionStateAverageFidelity(
+    averaged = StateAverageProblem(
         system=problem_one.system,
         pulse=problem_one.pulse,
         evolution=problem_one.evolution,
@@ -1586,7 +1359,7 @@ def test_state_average_fidelity_parallel_matches_serial_value_and_gradient():
         (initial, target_one, 2.0),
         (initial, target_zero, 1.0),
     ]
-    serial = ExpansionStateAverageFidelity(
+    serial = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1594,7 +1367,7 @@ def test_state_average_fidelity_parallel_matches_serial_value_and_gradient():
         differentiator=problem.differentiator,
         state_pairs=state_pairs,
     )
-    parallel = ExpansionStateAverageFidelity(
+    parallel = StateAverageProblem(
         system=problem.system,
         pulse=problem.pulse,
         evolution=problem.evolution,
@@ -1615,7 +1388,7 @@ def test_state_average_fidelity_requires_positive_worker_count():
     problem = two_level_problem(np.array([[0.2], [0.25], [0.15]]))
 
     try:
-        ExpansionStateAverageFidelity(
+        StateAverageProblem(
             system=problem.system,
             pulse=problem.pulse,
             evolution=problem.evolution,
@@ -1650,7 +1423,7 @@ def test_expansion_fidelity_drops_odd_average_and_keeps_second_order_terms():
 def test_zero_fluctuation_expansion_reduces_to_nominal_state_fidelity():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    system = IonTrapRFSystem(drift=0.1 * sz, controls=[sx])
+    system = ClosedSystem(drift=0.1 * sz, controls=[sx])
     pulse = PiecewiseConstantPulse(np.array([[0.2], [0.25], [0.15]]), dt=0.05)
     context = EvolutionContext(
         initial_state=np.array([1.0, 0.0], dtype=complex),
@@ -1788,7 +1561,7 @@ def two_level_lindblad_setup(amplitudes, gamma=0.02, dt=0.05, dW_method="first_o
     collapse_operators = (
         (np.sqrt(gamma) * sigma_minus, np.sqrt(0.5 * gamma) * sz) if gamma > 0.0 else ()
     )
-    system = LindbladOpenSystem(
+    system = open_system_from_matrices(
         drift=0.1 * sz,
         controls=[sx],
         collapse_operators=collapse_operators,
@@ -1983,7 +1756,7 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
             np.eye(dimension, dtype=complex)[2 * n_levels],
         ),
     ]
-    problem = ExpansionStateAverageFidelity(
+    problem = StateAverageProblem(
         system=system,
         pulse=pulse,
         evolution=LindbladExpansionEvolution(step_builder),
@@ -1992,7 +1765,7 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
         state_pairs=state_pairs,
     )
 
-    assert isinstance(system, LindbladOpenSystem)
+    assert isinstance(system, OpenSystem)
     assert len(collapse_operators) == 2
     value = problem.value()
     gradient = problem.gradient()
@@ -2001,20 +1774,20 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
     assert np.all(np.isfinite(gradient))
 
 
-# --- YAML experiment configuration (experiments_improved) ---
+# --- YAML experiment configuration (experiments/run_experiment.py) ---
 
 
 from dataclasses import replace as _dc_replace
 
 import pytest as _pytest
 
-from experiments_improved.config_io import (
+from experiments.config_io import (
     config_to_yaml_str,
     load_experiment_config,
     write_config_snapshot,
 )
-from experiments_improved.systems import get_system
-from experiments_improved import spin_boson_open as sbo
+from physical_systems import get_system
+from experiments import run_experiment as sbo
 
 
 def _yaml_config_file(tmp_path, text):
@@ -2083,13 +1856,61 @@ def test_yaml_config_physics_knobs_reach_system(tmp_path):
         ),
     )
     config = sbo.parse_args(["--config", str(path)])
-    _system, _noisy, specs = sbo.build_systems(config)
-    by_name = {spec["name"]: spec for spec in specs}
-    assert by_name["static[1]"]["coefficient"] == 42.0
-    assert "mode=(0.5, 0.5)" in by_name["control[1]"]["definition"]
+    _system, open_system = sbo.build_systems(config)
+    by_name = {term.name: term for term in open_system.fluctuation_terms}
+    assert by_name["motion-shift"].coefficient == 42.0
+    assert "mode=(0.5, 0.5)" in by_name["alpha2-rel"].definition
     pulse_a = sbo.build_initial_pulse(config)
     pulse_b = sbo.build_initial_pulse(config)
     np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
+
+
+def test_yaml_config_cosine_initial_pulse_shape(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 2",
+                "    initial_pulse_shape: cosine",
+                "    alpha1_cycles: 2.0",
+                "pulse:",
+                "  n_steps: 16",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    pulse = sbo.build_initial_pulse(config)
+    expected = spin_boson_initial_pulse(
+        n_steps=16,
+        total_time_us=config.pulse.total_time_us,
+        alpha1_cycles=2.0,
+    )
+    np.testing.assert_allclose(pulse.amplitudes, expected.amplitudes)
+
+    bad = _yaml_config_file(tmp_path, "system:\n  params:\n    initial_pulse_shape: triangle\n")
+    bad_config = sbo.parse_args(["--config", str(bad)])
+    with _pytest.raises(ValueError, match="cosine"):
+        sbo.build_initial_pulse(bad_config)
+
+
+def test_output_prefix_defaults_to_system_name(tmp_path):
+    config = sbo.default_experiment_config()
+    assert sbo.output_prefix(config) == "spin_boson"
+
+    path = _yaml_config_file(tmp_path, "output:\n  prefix: warmup\n")
+    config = sbo.parse_args(["--config", str(path)])
+    assert sbo.output_prefix(config) == "warmup"
+    assert "prefix: warmup" in config_to_yaml_str(config)
+
+    reloaded = load_experiment_config(
+        _yaml_config_file(tmp_path, config_to_yaml_str(config)),
+        sbo.default_experiment_config(),
+        get_system,
+    )
+    assert reloaded.output.prefix == "warmup"
 
 
 def test_yaml_config_enabled_flags(tmp_path):
@@ -2109,14 +1930,46 @@ def test_yaml_config_enabled_flags(tmp_path):
         ),
     )
     config = sbo.parse_args(["--config", str(path)])
-    assert sbo.build_collapse_operators(config) == []
-    _system, noisy_system, specs = sbo.build_systems(config)
-    assert specs == []
-    assert len(noisy_system.static_fluctuations) == 0
+    _system, open_system = sbo.build_systems(config)
+    assert open_system.noise_terms == ()
+    assert open_system.collapse_operators == ()
+    assert len(open_system.static_fluctuations) == 0
 
     cli_config = sbo.parse_args(["--gamma-heating", "50.0"])
     assert cli_config.system.noise.decoherence.enabled
-    assert len(sbo.build_collapse_operators(cli_config)) == 1
+    _cli_system, cli_open_system = sbo.build_systems(cli_config)
+    assert len(cli_open_system.collapse_operators) == 1
+
+
+def test_fluctuations_all_zero_sigmas_are_gated_off():
+    definition = get_system("spin_boson")
+    params = definition.default_params()
+    noise = definition.default_noise()
+    zero_sigmas = _dc_replace(
+        noise,
+        fluctuations=_dc_replace(
+            noise.fluctuations,
+            enabled=True,
+            sigma_static_spin_dephasing=0.0,
+            sigma_static_motional_frequency=0.0,
+            sigma_control_alpha1_relative=0.0,
+            sigma_control_alpha2_relative=0.0,
+        ),
+    )
+    assert not zero_sigmas.fluctuations.any_sigma_positive
+    _closed, open_system = definition.build_systems(params, zero_sigmas)
+    assert open_system.noise_terms == ()
+
+    one_sigma = _dc_replace(
+        zero_sigmas,
+        fluctuations=_dc_replace(
+            zero_sigmas.fluctuations, sigma_control_alpha2_relative=0.1
+        ),
+    )
+    _closed, open_system = definition.build_systems(params, one_sigma)
+    # Zero-sigma terms are kept: control-kind terms align with control
+    # channels positionally, so none may be dropped individually.
+    assert len(open_system.fluctuation_terms) == 4
 
 
 def test_yaml_config_unknown_keys_raise(tmp_path):

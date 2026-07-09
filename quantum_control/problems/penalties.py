@@ -55,6 +55,15 @@ class ParameterSmoothPenalty:
 
 
 class PenalizedParameterizedProblem:
+    """Parameter-space problem minus smoothness penalties.
+
+    Convention: problems are fidelities to be *maximized*, so penalties are
+    always subtracted here; the optimizer's ``maximize`` flag only flips the
+    sign handed to scipy. ``raw_value`` exposes the un-penalized fidelity for
+    reporting (there is deliberately no ``raw_gradient`` — nothing consumes
+    it).
+    """
+
     def __init__(self, problem, penalty, parameter_shape=None):
         self.problem = problem
         self.penalty = penalty
@@ -82,6 +91,15 @@ class PenalizedParameterizedProblem:
         return self.problem.gradient(parameters) - self.penalty.gradient(
             parameters,
             self.parameter_shape,
+        )
+
+    def value_and_gradient(self, parameters):
+        """Both at once; the wrapped problem evolves only once."""
+        parameters = self._reshape(parameters)
+        value, gradient = self.problem.value_and_gradient(parameters)
+        return (
+            value - self.penalty.value(parameters, self.parameter_shape),
+            gradient - self.penalty.gradient(parameters, self.parameter_shape),
         )
 
     def raw_value(self, parameters):

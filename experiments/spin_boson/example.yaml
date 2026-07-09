@@ -1,7 +1,7 @@
-# Example experiment configuration for experiments_improved/spin_boson_open.py.
+# Example experiment configuration for experiments/run_experiment.py.
 #
 # Run with:
-#   python experiments_improved/spin_boson_open.py --config experiments_improved/configs/example.yaml
+#   python -m experiments.run_experiment --config experiments/spin_boson/example.yaml
 #
 # Every value below equals the built-in default, so this file doubles as the
 # schema reference. Absent keys keep their defaults; unknown keys raise an
@@ -10,16 +10,18 @@
 # be passed back via --config to reproduce the run.
 
 system:
-  type: spin_boson              # registry key; see experiments_improved/systems/
+  type: spin_boson              # registry key; see physical_systems/
   params:
     n_levels: 6                 # motional Fock-space truncation
     phi_s: 0.0                  # spin phase of the drive (rad)
     eta: 0.075                  # Lamb-Dicke factor
     mode_vector: [0.5, -0.5]    # stretch mode; use [0.5, 0.5] for COM
-    target_gate: ms_xx_pi_over_2  # registry name (systems/spin_boson.py TARGET_GATES)
+    target_gate: ms_xx_pi_over_2  # registry name (physical_systems/spin_boson.py TARGET_GATES)
     alpha1_khz_bounds: [1.0, 60.0]   # control-amplitude bounds (kHz)
     alpha2_khz_bounds: [0.0, 200.0]
-    alpha1_offset_fraction: 0.7 # initial pulse: alpha1 = center + offset*scale + noise*scale*randn
+    initial_pulse_shape: random # "random" or "cosine" (see spin_boson/example2.yaml)
+    alpha1_cycles: 1.0          # cosine shape: alpha1 cycles across the pulse
+    alpha1_offset_fraction: 0.7 # random shape: alpha1 = center + offset*scale + noise*scale*randn
     alpha1_noise_fraction: 0.3
   noise:
     decoherence:                # first-order Lindblad correction channels
@@ -30,13 +32,13 @@ system:
     fluctuations:               # long-correlation classical noise expansion
       enabled: true
       sigma_static_spin_dephasing: 314.159     # rad/s, static[0]
-      sigma_static_motional_frequency: 300    # rad/s, static[1]
+      sigma_static_motional_frequency: 300.0    # rad/s, static[1]
       sigma_control_alpha1_relative: 1.0e-4    # relative alpha1 amplitude noise
       sigma_control_alpha2_relative: 1.0e-4    # relative alpha2 amplitude noise
 
 pulse:
   n_steps: 400
-  total_time_us: 200
+  total_time_us: 225.8
   # random_seed: 12345          # unset -> non-reproducible initial pulse noise
 
 objective:
@@ -57,6 +59,7 @@ penalty:
 
 runtime:
   workers: 10
+  workers: 10
   print_step: false
   print_fidelity_terms: false
   no_progress: false
@@ -64,4 +67,5 @@ runtime:
   # initial_pulse_npz: path/to/pulse.npz
 
 output:
-  output_root: outputs
+  output_root: experiments/outputs
+  prefix: spin-boson              # run dir = <prefix>_<timestamp>; unset -> system name

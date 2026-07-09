@@ -10,6 +10,12 @@ class ScipyOptimizer:
         self.options = options or {}
 
     def optimize(self, problem, initial_pulse=None, bounds=None, constraints=(), callback=None):
+        """Optimize a pulse-space problem (``value(pulse)`` interface).
+
+        When the problem provides ``value_and_gradient``, scipy is handed a
+        single fused callable (``jac=True``) so each iterate propagates only
+        once; otherwise value and gradient are evaluated separately.
+        """
         try:
             from scipy.optimize import minimize
         except ModuleNotFoundError as exc:
@@ -17,17 +23,29 @@ class ScipyOptimizer:
                 "ScipyOptimizer requires scipy. Install the 'scipy' package or use AdamOptimizer."
             ) from exc
 
-        pulse = initial_pulse or problem.pulse
+        if initial_pulse is None:
+            initial_pulse = problem.pulse
+        pulse = initial_pulse
         shape = pulse.amplitudes.shape
         sign = -1.0 if self.maximize else 1.0
 
-        def objective(flat_amplitudes):
-            trial_pulse = pulse.with_amplitudes(flat_amplitudes.reshape(shape))
-            return sign * problem.value(trial_pulse)
+        if hasattr(problem, "value_and_gradient"):
 
-        def jacobian(flat_amplitudes):
-            trial_pulse = pulse.with_amplitudes(flat_amplitudes.reshape(shape))
-            return sign * problem.gradient(trial_pulse).reshape(-1)
+            def objective(flat_amplitudes):
+                trial_pulse = pulse.with_amplitudes(flat_amplitudes.reshape(shape))
+                value, gradient = problem.value_and_gradient(trial_pulse)
+                return sign * value, sign * gradient.reshape(-1)
+
+            jacobian = True
+        else:
+
+            def objective(flat_amplitudes):
+                trial_pulse = pulse.with_amplitudes(flat_amplitudes.reshape(shape))
+                return sign * problem.value(trial_pulse)
+
+            def jacobian(flat_amplitudes):
+                trial_pulse = pulse.with_amplitudes(flat_amplitudes.reshape(shape))
+                return sign * problem.gradient(trial_pulse).reshape(-1)
 
         result = minimize(
             objective,
@@ -50,6 +68,11 @@ class ScipyOptimizer:
         constraints=(),
         callback=None,
     ):
+        """Optimize a parameter-space problem (``value(parameters)`` interface).
+
+        Uses the fused ``value_and_gradient`` (``jac=True``) when available,
+        halving the propagation cost per iterate.
+        """
         try:
             from scipy.optimize import minimize
         except ModuleNotFoundError as exc:
@@ -65,11 +88,20 @@ class ScipyOptimizer:
         sign = -1.0 if self.maximize else 1.0
         bounds = bounds if bounds is not None else problem.parameter_bounds()
 
-        def objective(flat_parameters):
-            return sign * problem.value(flat_parameters)
+        if hasattr(problem, "value_and_gradient"):
 
-        def jacobian(flat_parameters):
-            return sign * problem.gradient(flat_parameters).reshape(-1)
+            def objective(flat_parameters):
+                value, gradient = problem.value_and_gradient(flat_parameters)
+                return sign * value, sign * gradient.reshape(-1)
+
+            jacobian = True
+        else:
+
+            def objective(flat_parameters):
+                return sign * problem.value(flat_parameters)
+
+            def jacobian(flat_parameters):
+                return sign * problem.gradient(flat_parameters).reshape(-1)
 
         result = minimize(
             objective,
