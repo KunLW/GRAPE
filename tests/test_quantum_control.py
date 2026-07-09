@@ -328,6 +328,7 @@ def test_export_pulse_controls_writes_npz_keys_and_csv_columns(tmp_path):
         rad_s_per_khz=2.0,
     )
 
+    assert npz_path.name == "initial_pulse_s2.npz"
     data = np.load(npz_path)
     assert set(data.files) == {
         "amplitudes",

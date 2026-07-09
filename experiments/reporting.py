@@ -301,7 +301,9 @@ def export_pulse_controls(
     step_index = np.arange(pulse.n_steps)
     time_s = (step_index + 0.5) * pulse.dt
     time_us = time_s * 1e6
-    npz_path = output_stem.with_suffix(".npz")
+    # npz exports carry the step count in the name (e.g. final_pulse_s400.npz)
+    # so a pulse file identifies its resolution without being loaded.
+    npz_path = output_stem.with_name(f"{output_stem.name}_s{pulse.n_steps}.npz")
     csv_path = output_stem.with_suffix(".csv")
 
     np.savez(

@@ -93,8 +93,9 @@ to the system name). The `report.md` file is created before optimization
 starts with a preview of the configuration, fluctuation terms, decoherence
 channels, and `kappa_1`/`kappa_2`/`kappa_3` diagnostics. When optimization
 finishes or is interrupted, the final results are appended to the same report.
-Checkpoint files `latest_pulse.npz`, `latest_pulse.csv`, and
-`latest_parameters.npz` are updated during optimization, and the fully
+Checkpoint files `latest_pulse_s<n_steps>.npz`, `latest_pulse.csv`, and
+`latest_parameters.npz` are updated during optimization (pulse `.npz` exports
+carry the step count in the name, e.g. `final_pulse_s400.npz`), and the fully
 resolved `config.yaml` snapshot reproduces the run when passed back via
 `--config`.
 
@@ -108,7 +109,7 @@ Evaluate an exported pulse without optimizing:
 ```bash
 .venv/bin/python -m experiments.run_experiment evaluate \
   --config experiments/spin_boson/example.yaml \
-  --pulse-npz <run_dir>/final_pulse.npz
+  --pulse-npz <run_dir>/final_pulse_s400.npz
 ```
 
 System-specific configs and batch tooling live in a per-system folder such as

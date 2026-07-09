@@ -90,7 +90,7 @@ def write_pulses(output_dir=DEFAULT_OUTPUT_DIR, n_steps=DEFAULT_N_STEPS, total_t
     written = []
     for name, amplitudes in build_pulses(n_steps).items():
         _validate(name, amplitudes, n_steps)
-        path = output_dir / f"{name}.npz"
+        path = output_dir / f"{name}_s{n_steps}.npz"
         np.savez(path, amplitudes=amplitudes, dt=dt)
         written.append(path)
         alpha1_khz = amplitudes[:, 0] / RAD_S_PER_KHZ

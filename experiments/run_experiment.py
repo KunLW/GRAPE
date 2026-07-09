@@ -1403,6 +1403,8 @@ def run_perturbative_experiment(
     fidelity_terms_path = experiment_dir / "fidelity_terms.csv"
     fidelity_pair_terms_path = experiment_dir / "fidelity_terms_by_pair.csv"
     latest_pulse_stem = experiment_dir / "latest_pulse"
+    latest_pulse_npz_path = experiment_dir / f"latest_pulse_s{masked_initial_pulse.n_steps}.npz"
+    latest_pulse_csv_path = latest_pulse_stem.with_suffix(".csv")
     latest_parameters_path = experiment_dir / "latest_parameters.npz"
     pulse_path = experiment_dir / f"{config.system.type}_perturbative_pulses.png"
     propagation_path = experiment_dir / f"{config.system.type}_perturbative_state_propagation.png"
@@ -1521,7 +1523,7 @@ def run_perturbative_experiment(
             for row in fidelity_pair_rows:
                 row["step"] = int(step)
             fidelity_terms_log.append(fidelity_summary, fidelity_pair_rows)
-        latest_pulse_npz_path, latest_pulse_csv_path = export_pulse_controls(
+        export_pulse_controls(
             pulse,
             latest_pulse_stem,
             export_unit_divisor,
@@ -1714,8 +1716,8 @@ def run_perturbative_experiment(
         pulse_path,
         *((propagation_path,) if has_propagation_plot else ()),
         step_log_path,
-        latest_pulse_stem.with_suffix(".npz"),
-        latest_pulse_stem.with_suffix(".csv"),
+        latest_pulse_npz_path,
+        latest_pulse_csv_path,
         latest_parameters_path,
         initial_pulse_npz_path,
         initial_pulse_csv_path,
@@ -1736,8 +1738,8 @@ def run_perturbative_experiment(
         "step_log": step_log_path,
         "fidelity_terms": fidelity_terms_path if save_fidelity_terms else None,
         "fidelity_terms_by_pair": fidelity_pair_terms_path if save_fidelity_terms else None,
-        "latest_pulse_npz": latest_pulse_stem.with_suffix(".npz"),
-        "latest_pulse_csv": latest_pulse_stem.with_suffix(".csv"),
+        "latest_pulse_npz": latest_pulse_npz_path,
+        "latest_pulse_csv": latest_pulse_csv_path,
         "latest_parameters": latest_parameters_path,
         "initial_pulse_npz": initial_pulse_npz_path,
         "initial_pulse_csv": initial_pulse_csv_path,
@@ -1768,8 +1770,8 @@ def run_perturbative_experiment(
         if save_fidelity_terms:
             print(f"fidelity_terms={fidelity_terms_path}")
             print(f"fidelity_terms_by_pair={fidelity_pair_terms_path}")
-        print(f"latest_pulse_npz={latest_pulse_stem.with_suffix('.npz')}")
-        print(f"latest_pulse_csv={latest_pulse_stem.with_suffix('.csv')}")
+        print(f"latest_pulse_npz={latest_pulse_npz_path}")
+        print(f"latest_pulse_csv={latest_pulse_csv_path}")
         print(f"latest_parameters={latest_parameters_path}")
         print(f"initial_pulse_npz={initial_pulse_npz_path}")
         print(f"initial_pulse_csv={initial_pulse_csv_path}")
