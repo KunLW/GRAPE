@@ -29,14 +29,14 @@ system:
       gamma_spin_dephasing: 0.0       # rad/s, (sz (x) I + I (x) sz)/2
     fluctuations:               # long-correlation classical noise expansion
       enabled: true
-      sigma_static_spin_dephasing: 31.4159     # rad/s, static[0]
-      sigma_static_motional_frequency: 30.0    # rad/s, static[1]
+      sigma_static_spin_dephasing: 314.159     # rad/s, static[0]
+      sigma_static_motional_frequency: 300    # rad/s, static[1]
       sigma_control_alpha1_relative: 1.0e-4    # relative alpha1 amplitude noise
       sigma_control_alpha2_relative: 1.0e-4    # relative alpha2 amplitude noise
 
 pulse:
-  n_steps: 200
-  total_time_us: 225.8
+  n_steps: 400
+  total_time_us: 200
   # random_seed: 12345          # unset -> non-reproducible initial pulse noise
 
 objective:
@@ -56,7 +56,7 @@ penalty:
   l2_smooth_weight: 1.0e-4
 
 runtime:
-  workers: 1
+  workers: 10
   print_step: false
   print_fidelity_terms: false
   no_progress: false
@@ -64,4 +64,4 @@ runtime:
   # initial_pulse_npz: path/to/pulse.npz
 
 output:
-  output_root: experiments_improved/outputs
+  output_root: outputs
