@@ -19,8 +19,11 @@ from `doc/report_opengrape_iontrap.tex`. Static fluctuation matrices represent
 `sigma_xi H_xi`; control fluctuation matrices represent `sigma_chi_i H_chi_i`;
 the fluctuation Hamiltonian is
 `sum static_fluctuations + sum control_i * control_fluctuation_i`. The
-short-time-correlation decoherence limit belongs to the Lindblad/density-matrix
-path and is intentionally left as a future module.
+short-time-correlation decoherence limit is handled by the Lindblad path:
+`LindbladExpansionEvolution` + `LindbladCorrectedStateFidelity` add a
+first-order decoherence correction inside the optimization loop, and
+`faithful_gate_fidelity` (exact density-matrix propagation with Gauss-Hermite
+averaging over the fluctuations) provides the evaluation-time cross-check.
 
 ## Quick Example
 
