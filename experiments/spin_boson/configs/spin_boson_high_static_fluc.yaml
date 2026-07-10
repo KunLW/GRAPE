@@ -45,8 +45,8 @@ optimizer:
   ftol: 1.0e-15
   maximize: true
 penalty:
-  l1_smooth_weight: 0.0005
-  l2_smooth_weight: 0.0001
+  l1_smooth_weight: 0.0002
+  l2_smooth_weight: 0.0002
 runtime:
   workers: 10
   print_step: false

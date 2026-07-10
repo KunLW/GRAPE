@@ -1,0 +1,23 @@
+# Tiny configuration for checking the pulse-search pipeline on a laptop.
+# Values are deliberately trivial; results are meaningless physically.
+
+system:
+  type: spin_boson
+  params:
+    n_levels: 3
+
+pulse:
+  n_steps: 40
+  total_time_us: 225.8
+  random_seed: 12345
+
+optimizer:
+  maxiter: 3
+
+runtime:
+  workers: 1
+  no_progress: true
+
+output:
+  output_root: experiments/spin_boson/pulse_search/outputs/smoke
+  prefix: pulse-search-smoke

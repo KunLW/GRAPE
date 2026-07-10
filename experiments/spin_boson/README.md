@@ -12,6 +12,9 @@ spin_boson/
 │   ├── spin_boson_high_static_fluc.yaml # pulse-search config, strong static fluctuations
 │   └── spin_boson_low_static_fluc.yaml  # pulse-search config, weak static fluctuations
 ├── initial_pulses/   # experiment: generate + screen a family of starting pulses
+├── time_collapsing/  # Experiment 1: gate time shrinking
+├── pulse_search/     # Experiment 2: multi-initial-pulse search (local or Slurm)
+├── evaluation_check/ # sanity check: the four fidelity calculations along a run
 ├── reports/          # written reports for this system (git-tracked)
 ├── tmp/              # scratch; default output_root for ad-hoc runs (git-ignored)
 └── outputs/          # legacy run data from before the folder restructure (git-ignored)
@@ -38,10 +41,9 @@ fixed, so only `dt` shrinks). The loop stops when the noisy gate fidelity
 drops by more than a tolerance, and reports the best round with a
 `fidelity_vs_time.png` sweep plus per-round summaries.
 
-Status: implemented on the `worktree-time-collapsing` branch
-(`experiments/time_collapsing/` there — to be merged into
-`spin_boson/time_collapsing/` under this layout). A completed sweep
-(T = 300 µs shrunk to ~105 µs over 11 rounds) is in
+Status: implemented in `time_collapsing/` (see its README; run via
+`python -m experiments.spin_boson.time_collapsing.run_time_collapsing`).
+A completed sweep (T = 300 µs shrunk to ~105 µs over 11 rounds) is in
 `outputs/time_collapsing_20260709_195249/`.
 
 ### Experiment 2: pulse searching (`pulse_search/`)
@@ -52,13 +54,10 @@ optimization per pulse under the same config, then collects a best-first
 summary to pick the best basin. Runs are idempotent per-pulse directories, so
 they parallelize locally (`--parallel K`) or as a Slurm job array on USTC-SCC.
 
-Status: implemented on the `worktree-pulse-search` branch
-(`experiments/pulse_search/` there: `pulse_gallery.py`, `preview_pulses.py`,
-`run_search.py`, `collect_results.py`, `search.yaml`, `smoke.yaml`,
-`submit_slurm.sh`, `scc_deploy.md` — to be merged into
-`spin_boson/pulse_search/`). The `configs/spin_boson_{high,low}_static_fluc.yaml`
-configs here define its two noise scenarios; a completed gallery search is in
-`outputs/pulse_search_260709/`.
+Status: implemented in `pulse_search/` (see its README and `scc_deploy.md`
+for the USTC-SCC Slurm workflow). The
+`configs/spin_boson_{high,low}_static_fluc.yaml` configs here define its two
+noise scenarios; a completed gallery search is in `outputs/pulse_search_260709/`.
 
 ### Experiment 3: noise robustness analysis (planned)
 
@@ -68,6 +67,17 @@ fluctuation sigmas / decoherence rates around their nominal values and check
 the fidelity response (`evaluate --faithful` gives the exact Lindblad +
 Gauss–Hermite reference; `driver/evaluate_error_budget.py` gives the
 per-term perturbative budget). Not started — no code yet.
+
+## Supporting experiment: `evaluation_check/`
+
+Compares the four fidelity calculations (closed, perturbative open, Lindblad-
+corrected, and the exact faithful check) along an optimization run to validate
+that the optimizer's objective tracks the exact fidelity:
+
+```bash
+.venv/bin/python experiments/spin_boson/evaluation_check/run_evaluation_check.py \
+    --config experiments/spin_boson/evaluation_check/spin-boson-origin.yaml
+```
 
 ## Supporting experiment: `initial_pulses/`
 

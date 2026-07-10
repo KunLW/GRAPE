@@ -1,0 +1,70 @@
+# Example experiment configuration for experiments/driver/run_experiment.py.
+#
+# Run with:
+#   python -m experiments.driver.run_experiment --config <filename>
+#
+# Every value below equals the built-in default, so this file doubles as the
+# schema reference. Absent keys keep their defaults; unknown keys raise an
+# error. Explicitly passed CLI flags override values from this file. Each run
+# writes the fully resolved configuration to <run_dir>/config.yaml, which can
+# be passed back via --config to reproduce the run.
+
+system:
+  type: spin_boson              # registry key; see physical_systems/
+  params:
+    n_levels: 6                 # motional Fock-space truncation
+    phi_s: 0.0                  # spin phase of the drive (rad)
+    eta: 0.075                  # Lamb-Dicke factor
+    mode_vector: [0.5, -0.5]    # stretch mode; use [0.5, 0.5] for COM
+    target_gate: ms_xx_pi_over_2  # registry name (physical_systems/spin_boson.py TARGET_GATES)
+    alpha1_khz_bounds: [1.0, 60.0]   # control-amplitude bounds (kHz)
+    alpha2_khz_bounds: [0.0, 200.0]
+    initial_pulse_shape: random # "random" or "cosine" (see spin_boson/example2.yaml)
+    alpha1_cycles: 1.0          # cosine shape: alpha1 cycles across the pulse
+    alpha1_offset_fraction: 0.7 # random shape: alpha1 = center + offset*scale + noise*scale*randn
+    alpha1_noise_fraction: 0.3
+  noise:
+    decoherence:                # first-order Lindblad correction channels
+      enabled: false
+      gamma_heating: 0.0              # rad/s, L = sqrt(gamma) I_spin (x) a†
+      gamma_motional_dephasing: 0.0   # rad/s, I_spin (x) a†a
+      gamma_spin_dephasing: 0.0       # rad/s, (sz (x) I + I (x) sz)/2
+    fluctuations:               # long-correlation classical noise expansion
+      enabled: true
+      sigma_static_spin_dephasing: 314.159     # rad/s, static[0]
+      sigma_static_motional_frequency: 300.0    # rad/s, static[1]
+      sigma_control_alpha1_relative: 1.0e-4    # relative alpha1 amplitude noise
+      sigma_control_alpha2_relative: 1.0e-4    # relative alpha2 amplitude noise
+
+pulse:
+  n_steps: 400
+  total_time_us: 300
+  # random_seed: 12345          # unset -> non-reproducible initial pulse noise
+
+objective:
+  max_order: 2
+  drop_odd_average: true
+  normalize_weights: false
+
+optimizer:
+  method: L-BFGS-B
+  maxiter: 400
+  gtol: 1.0e-12
+  ftol: 1.0e-15
+  maximize: true
+
+penalty:
+  l1_smooth_weight: 5.0e-4
+  l2_smooth_weight: 1.0e-4
+
+runtime:
+  workers: 10
+  print_step: false
+  print_fidelity_terms: false
+  no_progress: false
+  # save_fidelity_terms: true   # unset -> follows print_fidelity_terms
+  initial_pulse_npz: experiments/spin_boson/time_collapsing/high_alpha1_const.npz
+
+output:
+  output_root: experiments/spin_boson/time_collapsing/outputs
+  prefix: time-collap              # run dir = <prefix>_<timestamp>; unset -> system name
