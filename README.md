@@ -83,40 +83,44 @@ Run the YAML-driven optimizer from the repository root; the physical system is
 selected by `system.type` (see `physical_systems/`):
 
 ```bash
-.venv/bin/python -m experiments.run_experiment \
-  --config experiments/spin_boson/example.yaml
+.venv/bin/python -m experiments.driver.run_experiment \
+  --config experiments/spin_boson/configs/example.yaml
 ```
 
 Each run writes a `<prefix>_<timestamp>` directory under the configured
-`output.output_root` (default `experiments/outputs/`; `output.prefix` defaults
-to the system name). The `report.md` file is created before optimization
+`output.output_root` (default `experiments/<system.type>/tmp/outputs/`;
+`output.prefix` defaults to the system name). The `report.md` file is created before optimization
 starts with a preview of the configuration, fluctuation terms, decoherence
 channels, and `kappa_1`/`kappa_2`/`kappa_3` diagnostics. When optimization
 finishes or is interrupted, the final results are appended to the same report.
-Checkpoint files `latest_pulse_s<n_steps>.npz`, `latest_pulse.csv`, and
-`latest_parameters.npz` are updated during optimization (pulse `.npz` exports
-carry the step count in the name, e.g. `final_pulse_s400.npz`), and the fully
-resolved `config.yaml` snapshot reproduces the run when passed back via
-`--config`.
+All pulse exports live in the run's `pulse/` subfolder (`.npz` names carry the
+step count, e.g. `final_pulse_s400.npz`); the plots are `pulse.png` and
+`population.png`. Checkpoint files `latest_pulse_s<n_steps>.npz`,
+`latest_pulse.csv`, and `latest_parameters.npz` are updated there during
+optimization and deleted when the run completes — they remain only after an
+interrupted run. The fully resolved `config.yaml` snapshot reproduces the run
+when passed back via `--config`.
 
 Useful flags (each overrides the YAML): `--maxiter`, `--n-steps`,
 `--l1-smooth-weight`, `--l2-smooth-weight`, `--workers`, `--print-step`,
 `--print-fidelity-terms`, `--initial-pulse-npz`, `--no-progress`,
-`--close-grape`, and the spin-boson `--gamma-*` decoherence rates.
+`--close-grape` (disables all noise terms), `--output-root`, and
+`--output-prefix`.
 
 Evaluate an exported pulse without optimizing:
 
 ```bash
-.venv/bin/python -m experiments.run_experiment evaluate \
-  --config experiments/spin_boson/example.yaml \
+.venv/bin/python -m experiments.driver.run_experiment evaluate \
+  --config experiments/spin_boson/configs/example.yaml \
   --pulse-npz <run_dir>/final_pulse_s400.npz
 ```
 
-System-specific configs and batch tooling live in a per-system folder such as
-`experiments/spin_boson/`: `example.yaml` documents every configuration key,
-`example2.yaml` shows the deterministic cosine/sine initial pulse,
-`make_initial_pulses.py` generates starting-pulse families, and
-`run_initial_pulses.py` evaluates or optimizes each of them.
+System-specific configs and experiments live in a per-system folder such as
+`experiments/spin_boson/`: `configs/example.yaml` documents every configuration
+key, `configs/example2.yaml` shows the deterministic cosine/sine initial pulse,
+and the `initial_pulses/` experiment folder holds `make_initial_pulses.py`
+(generates starting-pulse families) and `run_initial_pulses.py` (evaluates or
+optimizes each of them). See `experiments/README.md` for the folder layout.
 
 ## Averaging Multiple State Pairs
 

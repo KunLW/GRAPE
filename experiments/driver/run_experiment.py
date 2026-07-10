@@ -8,10 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("MPLCONFIGDIR", str(OUTPUT_DIR / ".matplotlib"))
+ROOT = Path(__file__).resolve().parents[2]
+EXPERIMENTS_DIR = Path(__file__).resolve().parents[1]
+os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 sys.path.insert(0, str(ROOT))
 
 import matplotlib
@@ -21,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments.reporting import (
+from experiments.driver.reporting import (
     FidelityTermsLog,
     StepLog,
     export_pulse_controls,
@@ -51,7 +50,7 @@ from quantum_control import (
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
-from experiments.config_io import load_experiment_config, write_config_snapshot
+from experiments.driver.config_io import load_experiment_config, write_config_snapshot
 from physical_systems import get_system
 
 N_STEPS = 200
@@ -133,7 +132,8 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class OutputConfig:
-    output_root: Path = field(default_factory=lambda: OUTPUT_DIR)
+    # None means "derive from the system": experiments/<system.type>/tmp/outputs.
+    output_root: Path | None = None
     # Run-directory prefix; None means "use the registered system name"
     # (config.system.type). Directories are named <prefix>_<timestamp>.
     prefix: str | None = None
@@ -198,6 +198,16 @@ def default_experiment_config():
     return ExperimentConfig()
 
 
+def default_output_root(system_type):
+    return EXPERIMENTS_DIR / str(system_type) / "tmp" / "outputs"
+
+
+def resolved_output_root(config):
+    if config.output.output_root is not None:
+        return Path(config.output.output_root)
+    return default_output_root(config.system.type)
+
+
 def _with_fluctuations_enabled(system_selection, enabled):
     noise = system_selection.noise
     return replace(
@@ -205,6 +215,18 @@ def _with_fluctuations_enabled(system_selection, enabled):
         noise=replace(
             noise,
             fluctuations=replace(noise.fluctuations, enabled=bool(enabled)),
+        ),
+    )
+
+
+def _with_noise_enabled(system_selection, enabled):
+    noise = system_selection.noise
+    return replace(
+        system_selection,
+        noise=replace(
+            noise,
+            fluctuations=replace(noise.fluctuations, enabled=bool(enabled)),
+            decoherence=replace(noise.decoherence, enabled=bool(enabled)),
         ),
     )
 
@@ -288,7 +310,11 @@ def _coerce_experiment_config(config):
         ),
         output=replace(
             defaults.output,
-            output_root=Path(getattr(config, "output_root", defaults.output.output_root)),
+            output_root=(
+                Path(config.output_root)
+                if getattr(config, "output_root", None) is not None
+                else defaults.output.output_root
+            ),
         ),
     )
 
@@ -379,25 +405,19 @@ def parse_args(argv=None):
         "--close-grape",
         action="store_true",
         default=suppress,
-        help="Run optimization without fluctuation terms.",
+        help="Run optimization without any noise terms (fluctuations and decoherence).",
     )
     parser.add_argument(
-        "--gamma-heating",
-        type=float,
+        "--output-root",
+        type=Path,
         default=suppress,
-        help="Motional heating rate (rad/s) for the Lindblad channel I_spin ⊗ a†; implies decoherence enabled.",
+        help="Root directory for run outputs (overrides output.output_root).",
     )
     parser.add_argument(
-        "--gamma-motional-dephasing",
-        type=float,
+        "--output-prefix",
+        type=str,
         default=suppress,
-        help="Motional dephasing rate (rad/s) for the Lindblad channel I_spin ⊗ a†a; implies decoherence enabled.",
-    )
-    parser.add_argument(
-        "--gamma-spin-dephasing",
-        type=float,
-        default=suppress,
-        help="Collective spin dephasing rate (rad/s) for the Lindblad channel (sz⊗I + I⊗sz)/2; implies decoherence enabled.",
+        help="Run-directory prefix (overrides output.prefix; default is the system name).",
     )
     args = parser.parse_args(argv)
     return _apply_cli_overrides(_load_base_config(args.config), args)
@@ -408,27 +428,8 @@ def _apply_cli_overrides(base, args):
         return getattr(args, name, fallback)
 
     system = base.system
-    gamma_names = ("gamma_heating", "gamma_motional_dephasing", "gamma_spin_dephasing")
-    gamma_updates = {
-        name: float(getattr(args, name)) for name in gamma_names if hasattr(args, name)
-    }
-    if gamma_updates:
-        if system.type != "spin_boson":
-            raise ValueError(
-                "--gamma-* flags apply to the spin_boson system only; "
-                f"config selects system type {system.type!r}."
-            )
-        system = replace(
-            system,
-            noise=replace(
-                system.noise,
-                decoherence=replace(
-                    system.noise.decoherence, enabled=True, **gamma_updates
-                ),
-            ),
-        )
     if getattr(args, "close_grape", False):
-        system = _with_fluctuations_enabled(system, False)
+        system = _with_noise_enabled(system, False)
     return replace(
         base,
         system=system,
@@ -454,6 +455,11 @@ def _apply_cli_overrides(base, args):
             ),
             initial_pulse_npz=arg("initial_pulse_npz", base.runtime.initial_pulse_npz),
             no_progress=arg("no_progress", base.runtime.no_progress),
+        ),
+        output=replace(
+            base.output,
+            output_root=arg("output_root", base.output.output_root),
+            prefix=arg("output_prefix", base.output.prefix),
         ),
     )
 
@@ -496,6 +502,18 @@ def parse_evaluate_args(argv=None):
         default=5,
         help="Gauss-Hermite nodes per fluctuation dimension for --faithful.",
     )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Root directory for run outputs (overrides output.output_root).",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=str,
+        default=argparse.SUPPRESS,
+        help="Run-directory prefix (overrides output.prefix; default is the system name).",
+    )
     args = parser.parse_args(argv)
     base = _load_base_config(args.config)
     config = replace(
@@ -509,6 +527,11 @@ def parse_evaluate_args(argv=None):
             workers=getattr(args, "workers", base.runtime.workers),
             initial_pulse_npz=getattr(args, "pulse_npz", base.runtime.initial_pulse_npz),
             no_progress=True,
+        ),
+        output=replace(
+            base.output,
+            output_root=getattr(args, "output_root", base.output.output_root),
+            prefix=getattr(args, "output_prefix", base.output.prefix),
         ),
     )
     return config, {"faithful": args.faithful, "hermite_points": args.hermite_points}
@@ -1383,7 +1406,7 @@ def run_perturbative_experiment(
     )
     masked_initial_pulse = penalized_problem.pulse_from_parameters(initial_parameters)
     generated_at = generated_at or datetime.now()
-    output_root = Path(output_root) if output_root is not None else config.output.output_root
+    output_root = Path(output_root) if output_root is not None else resolved_output_root(config)
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
         output_root,
         run_label or output_prefix(config),
@@ -1402,14 +1425,15 @@ def run_perturbative_experiment(
     step_log_path = experiment_dir / "step_log.csv"
     fidelity_terms_path = experiment_dir / "fidelity_terms.csv"
     fidelity_pair_terms_path = experiment_dir / "fidelity_terms_by_pair.csv"
-    latest_pulse_stem = experiment_dir / "latest_pulse"
-    latest_pulse_npz_path = experiment_dir / f"latest_pulse_s{masked_initial_pulse.n_steps}.npz"
+    pulse_dir = experiment_dir / "pulse"
+    latest_pulse_stem = pulse_dir / "latest_pulse"
+    latest_pulse_npz_path = pulse_dir / f"latest_pulse_s{masked_initial_pulse.n_steps}.npz"
     latest_pulse_csv_path = latest_pulse_stem.with_suffix(".csv")
-    latest_parameters_path = experiment_dir / "latest_parameters.npz"
-    pulse_path = experiment_dir / f"{config.system.type}_perturbative_pulses.png"
-    propagation_path = experiment_dir / f"{config.system.type}_perturbative_state_propagation.png"
-    initial_pulse_stem = experiment_dir / "initial_pulse"
-    final_pulse_stem = experiment_dir / "final_pulse"
+    latest_parameters_path = pulse_dir / "latest_parameters.npz"
+    pulse_path = experiment_dir / "pulse.png"
+    propagation_path = experiment_dir / "population.png"
+    initial_pulse_stem = pulse_dir / "initial_pulse"
+    final_pulse_stem = pulse_dir / "final_pulse"
     report_path = experiment_dir / "report.md"
     step_log = StepLog(step_log_path, print_steps=config.runtime.print_step)
     save_fidelity_terms = config.runtime.should_save_fidelity_terms
@@ -1680,6 +1704,15 @@ def run_perturbative_experiment(
         export_unit_divisor,
         channel_names=channel_names,
     )
+    if not interrupted:
+        # Completed runs keep only initial/final pulses; the latest_* checkpoints
+        # exist to survive an interrupted optimization.
+        for checkpoint_path in (
+            latest_pulse_npz_path,
+            latest_pulse_csv_path,
+            latest_parameters_path,
+        ):
+            checkpoint_path.unlink(missing_ok=True)
 
     initial_decoherence_correction = decoherence_correction(masked_initial_pulse)
     final_decoherence_correction = decoherence_correction(final_pulse)
@@ -1716,9 +1749,11 @@ def run_perturbative_experiment(
         pulse_path,
         *((propagation_path,) if has_propagation_plot else ()),
         step_log_path,
-        latest_pulse_npz_path,
-        latest_pulse_csv_path,
-        latest_parameters_path,
+        *(
+            (latest_pulse_npz_path, latest_pulse_csv_path, latest_parameters_path)
+            if interrupted
+            else ()
+        ),
         initial_pulse_npz_path,
         initial_pulse_csv_path,
         final_pulse_npz_path,
@@ -1738,9 +1773,9 @@ def run_perturbative_experiment(
         "step_log": step_log_path,
         "fidelity_terms": fidelity_terms_path if save_fidelity_terms else None,
         "fidelity_terms_by_pair": fidelity_pair_terms_path if save_fidelity_terms else None,
-        "latest_pulse_npz": latest_pulse_npz_path,
-        "latest_pulse_csv": latest_pulse_csv_path,
-        "latest_parameters": latest_parameters_path,
+        "latest_pulse_npz": latest_pulse_npz_path if interrupted else None,
+        "latest_pulse_csv": latest_pulse_csv_path if interrupted else None,
+        "latest_parameters": latest_parameters_path if interrupted else None,
         "initial_pulse_npz": initial_pulse_npz_path,
         "initial_pulse_csv": initial_pulse_csv_path,
         "final_pulse_npz": final_pulse_npz_path,
@@ -1770,9 +1805,10 @@ def run_perturbative_experiment(
         if save_fidelity_terms:
             print(f"fidelity_terms={fidelity_terms_path}")
             print(f"fidelity_terms_by_pair={fidelity_pair_terms_path}")
-        print(f"latest_pulse_npz={latest_pulse_npz_path}")
-        print(f"latest_pulse_csv={latest_pulse_csv_path}")
-        print(f"latest_parameters={latest_parameters_path}")
+        if interrupted:
+            print(f"latest_pulse_npz={latest_pulse_npz_path}")
+            print(f"latest_pulse_csv={latest_pulse_csv_path}")
+            print(f"latest_parameters={latest_parameters_path}")
         print(f"initial_pulse_npz={initial_pulse_npz_path}")
         print(f"initial_pulse_csv={initial_pulse_csv_path}")
         print(f"final_pulse_npz={final_pulse_npz_path}")
@@ -1930,20 +1966,20 @@ def evaluate_pulse(config=None, *, experiment_dir=None, generated_at=None, print
 
     generated_at = generated_at or datetime.now()
     experiment_dir = Path(experiment_dir) if experiment_dir is not None else timestamped_experiment_dir(
-        config.output.output_root,
+        resolved_output_root(config),
         f"{output_prefix(config)}_evaluation",
         generated_at,
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
     config_snapshot_path = write_config_snapshot(config, experiment_dir / "config.yaml")
-    pulse_stem = experiment_dir / "evaluated_pulse"
+    pulse_stem = experiment_dir / "pulse" / "evaluated_pulse"
     pulse_npz_path, pulse_csv_path = export_pulse_controls(
         evaluated_pulse,
         pulse_stem,
         export_unit_divisor,
         channel_names=channel_names,
     )
-    propagation_path = experiment_dir / "eva_state_propagation.png"
+    propagation_path = experiment_dir / "population.png"
     report_path = experiment_dir / "eva_report.md"
     time_edges_us = np.arange(evaluated_pulse.n_steps + 1) * evaluated_pulse.dt * 1e6
     has_propagation_plot = structure is not None and evaluated_states is not None

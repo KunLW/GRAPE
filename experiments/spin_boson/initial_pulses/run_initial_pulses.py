@@ -6,9 +6,9 @@ to instead run the full L-BFGS-B optimization for each pulse and compare the
 initial vs. final noisy-gate fidelity.
 
 Usage:
-    python -m experiments.spin_boson.run_initial_pulses                 # evaluate all
-    python -m experiments.spin_boson.run_initial_pulses --optimize      # optimize all
-    python -m experiments.spin_boson.run_initial_pulses --workers 4 --maxiter 40
+    python -m experiments.spin_boson.initial_pulses.run_initial_pulses                 # evaluate all
+    python -m experiments.spin_boson.initial_pulses.run_initial_pulses --optimize      # optimize all
+    python -m experiments.spin_boson.initial_pulses.run_initial_pulses --workers 4 --maxiter 40
 """
 
 from __future__ import annotations
@@ -17,14 +17,13 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 
-from experiments.run_experiment import (
-    OUTPUT_DIR,
+from experiments.driver.run_experiment import (
     default_experiment_config,
     evaluate_pulse,
     run_perturbative_experiment,
 )
 
-DEFAULT_PULSE_DIR = OUTPUT_DIR / "initial_pulses"
+DEFAULT_PULSE_DIR = Path(__file__).resolve().parent / "outputs" / "initial_pulses"
 
 
 def _config_for(pulse_npz, workers, maxiter):

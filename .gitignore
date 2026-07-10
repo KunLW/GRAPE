@@ -45,12 +45,11 @@ Thumbs.db
 *.swp
 *.swo
 
-# Experiment outputs
-experiments/outputs/
-experiments_improved/outputs/
+# Experiment outputs (any outputs/ dir, per-system tmp/, legacy run-data dirs)
 outputs/
-experiments/outputs_legacy/
-
+outputs_*/
+experiments/*/tmp/
+.matplotlib/
 # doc
 *.pdf
 *.bcf

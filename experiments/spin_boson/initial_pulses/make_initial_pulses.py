@@ -11,8 +11,8 @@ with a matching ``dt`` so they load through ``run_experiment.py`` without a
 dt-mismatch warning.
 
 Usage:
-    python -m experiments.spin_boson.make_initial_pulses            # write all pulses
-    python -m experiments.spin_boson.make_initial_pulses --list     # list names only
+    python -m experiments.spin_boson.initial_pulses.make_initial_pulses            # write all pulses
+    python -m experiments.spin_boson.initial_pulses.make_initial_pulses --list     # list names only
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ ALPHA1_KHZ_BOUNDS = (1.0, 60.0)
 ALPHA2_KHZ_BOUNDS = (0.0, 200.0)
 DEFAULT_N_STEPS = 200
 DEFAULT_TOTAL_TIME_US = 225.8
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "initial_pulses"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "outputs" / "initial_pulses"
 
 
 def _assemble(alpha1_khz, alpha2_khz, n_steps):

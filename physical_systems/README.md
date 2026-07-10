@@ -1,6 +1,6 @@
 # Adding a physical system: two files
 
-The experiment driver (`experiments/run_experiment.py`) is fully
+The experiment driver (`experiments/driver/run_experiment.py`) is fully
 decoupled from the physical system, and the registry in
 `physical_systems/__init__.py` auto-discovers every module in this folder.
 Adding a system (an NV center, a Rydberg array, ...) therefore means creating
@@ -73,7 +73,9 @@ optimizer:
   maxiter: 10
 ```
 
-Run with `python -m experiments.run_experiment --config my_qubit.yaml`.
+Put the config in `experiments/my_qubit/configs/` (see `experiments/README.md`
+for the per-system folder layout) and run with
+`python -m experiments.driver.run_experiment --config experiments/my_qubit/configs/my_qubit.yaml`.
 
 Required hooks: `name`, `default_params()`, `build_closed_system(params)`,
 `control_bounds(params)`, `state_pairs(params)`. The default parameterization
@@ -131,8 +133,7 @@ See `physical_systems/spin_boson.py` for the full reference implementation
 modules.** Everything system-specific flows through the definition object
 resolved from `system.type`. (Grep-checkable: `run_experiment.py`,
 `quantum_control/` must not mention a concrete system name; the only
-exceptions are the driver's default `system.type` and the spin-boson-only
-`--gamma-*` CLI sugar, which raises for other system types.)
+exception is the driver's default `system.type`.)
 
 ## Naming convention
 
@@ -143,7 +144,7 @@ coherent kind is always called "fluctuation" and the Markovian kind
 
 ## Known debt
 
-- `experiments/spin_boson/make_initial_pulses.py` duplicates spin-boson
+- `experiments/spin_boson/initial_pulses/make_initial_pulses.py` duplicates spin-boson
   constants (bounds, default total time, alpha2 endpoint convention)
   independently of the system definition; it is a standalone spin-boson
   utility.

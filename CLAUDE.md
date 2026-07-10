@@ -14,15 +14,15 @@ Always use the repo's virtualenv, not system Python: `.venv/bin/python` (when wo
 .venv/bin/python -m pytest tests/test_quantum_control.py::test_name  # or -k pattern
 
 # Modern YAML-driven optimization run
-.venv/bin/python -m experiments.run_experiment --config experiments/spin_boson/example.yaml
+.venv/bin/python -m experiments.driver.run_experiment --config experiments/spin_boson/configs/example.yaml
 
 # Evaluate an exported pulse without optimizing
-.venv/bin/python -m experiments.run_experiment evaluate --config <cfg.yaml> --pulse-npz <pulse.npz>
+.venv/bin/python -m experiments.driver.run_experiment evaluate --config <cfg.yaml> --pulse-npz <pulse.npz>
 ```
 
 The suite is expected to pass fully. For numerical changes, additionally rerun a small fixed-seed experiment and check the metrics reproduce.
 
-Runs write timestamped directories under the configured `output_root` (e.g. `experiments/outputs/`) containing `report.md`, pulse `.npz`/`.csv` exports, `step_log.csv`, and checkpoint files that update during optimization.
+Runs write timestamped directories under the configured `output_root` — default when unset is `experiments/<system.type>/tmp/outputs/`; real experiments set it to their own `experiments/<system>/<experiment>/outputs/` — containing `report.md`, `step_log.csv`, `pulse.png`/`population.png` plots, and pulse `.npz`/`.csv` exports in a `pulse/` subfolder (`latest_*` checkpoints there update during optimization and are removed on completion; they survive only an interrupted run).
 
 ## Architecture
 
@@ -37,7 +37,7 @@ Three layers, from generic to specific:
 
 2. **`physical_systems/`** — one file per concrete system (physics + `SystemDefinitionBase` adapter), auto-discovered by the registry in its `__init__.py`. **Adding a system = two files**: a module here and a YAML config; a closed-only system needs ~35 lines (`name`, `default_params`, `build_closed_system`, `control_bounds`, `state_pairs`) and noise terms are added later via `fluctuation_terms`/`decoherence_channels` hooks — follow `physical_systems/README.md`; `spin_boson.py` is the reference implementation.
 
-3. **`experiments/`** — the driver layer. `run_experiment.py` is sealed: it reaches every system-specific fact (Hamiltonians, noise, bounds, targets, plot labels) through the definition resolved from the YAML `system.type`. **Invariant: the driver and `quantum_control` core must never import concrete system modules.** Shared report/log/plot plumbing lives in `experiments/reporting.py`; `experiments/outputs_legacy/` and `experiments/outputs_v1/` hold run data from the deleted legacy scripts.
+3. **`experiments/`** — the driver layer plus per-system experiment folders. Driver scripts live in `experiments/driver/`; `run_experiment.py` is sealed: it reaches every system-specific fact (Hamiltonians, noise, bounds, targets, plot labels) through the definition resolved from the YAML `system.type`. **Invariant: the driver and `quantum_control` core must never import concrete system modules.** Shared report/log/plot plumbing lives in `experiments/driver/reporting.py`. Each system gets `experiments/<system_name>/` with `configs/`, per-experiment script folders (each with its own git-ignored `outputs/`), a git-ignored `tmp/`, and a git-tracked `reports/` — see `experiments/README.md`.
 
 ### Conventions that span files
 

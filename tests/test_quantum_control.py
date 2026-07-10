@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from experiments.reporting import (
+from experiments.driver.reporting import (
     FidelityTermsLog,
     StepLog,
     export_pulse_controls,
@@ -1300,7 +1300,7 @@ def test_error_budget_cli_smoke_test(tmp_path):
     result = subprocess.run(
         [
             sys.executable,
-            "experiments/evaluate_error_budget.py",
+            "experiments/driver/evaluate_error_budget.py",
             "--pulse-npz",
             str(pulse_path),
             "--system-factory",
@@ -1775,20 +1775,20 @@ def test_lindblad_state_average_fidelity_runs_with_lindblad_triple():
     assert np.all(np.isfinite(gradient))
 
 
-# --- YAML experiment configuration (experiments/run_experiment.py) ---
+# --- YAML experiment configuration (experiments/driver/run_experiment.py) ---
 
 
 from dataclasses import replace as _dc_replace
 
 import pytest as _pytest
 
-from experiments.config_io import (
+from experiments.driver.config_io import (
     config_to_yaml_str,
     load_experiment_config,
     write_config_snapshot,
 )
 from physical_systems import get_system
-from experiments import run_experiment as sbo
+from experiments.driver import run_experiment as sbo
 
 
 def _yaml_config_file(tmp_path, text):
@@ -1936,10 +1936,29 @@ def test_yaml_config_enabled_flags(tmp_path):
     assert open_system.collapse_operators == ()
     assert len(open_system.static_fluctuations) == 0
 
-    cli_config = sbo.parse_args(["--gamma-heating", "50.0"])
-    assert cli_config.system.noise.decoherence.enabled
-    _cli_system, cli_open_system = sbo.build_systems(cli_config)
-    assert len(cli_open_system.collapse_operators) == 1
+    enabled_path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  noise:",
+                "    decoherence:",
+                "      enabled: true",
+                "      gamma_heating: 50.0",
+                "",
+            ]
+        ),
+    )
+    enabled_config = sbo.parse_args(["--config", str(enabled_path)])
+    assert enabled_config.system.noise.decoherence.enabled
+    _enabled_system, enabled_open_system = sbo.build_systems(enabled_config)
+    assert len(enabled_open_system.collapse_operators) == 1
+
+    closed_config = sbo.parse_args(["--config", str(enabled_path), "--close-grape"])
+    assert not closed_config.system.noise.fluctuations.enabled
+    assert not closed_config.system.noise.decoherence.enabled
+    _closed_system, closed_open_system = sbo.build_systems(closed_config)
+    assert closed_open_system.noise_terms == ()
 
 
 def test_fluctuations_all_zero_sigmas_are_gated_off():
