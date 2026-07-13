@@ -1,0 +1,24 @@
+# Tiny configuration for checking the time-shrink pipeline on a laptop.
+# Values are deliberately trivial; results are meaningless physically.
+# n_steps stays 400 so the real copied pulses in pulses/ load unchanged.
+
+system:
+  type: spin_boson
+  params:
+    n_levels: 3
+
+pulse:
+  n_steps: 400
+  total_time_us: 225.8
+  random_seed: 12345
+
+optimizer:
+  maxiter: 2
+
+runtime:
+  workers: 1
+  no_progress: true
+
+output:
+  output_root: experiments/spin_boson/slurm_time_shrink/outputs/smoke
+  prefix: time-shrink-smoke

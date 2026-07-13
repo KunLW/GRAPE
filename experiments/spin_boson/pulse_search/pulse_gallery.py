@@ -64,60 +64,74 @@ def _smooth(values, window=9):
     return np.convolve(padded, kernel, mode="valid")[: len(values)]
 
 
-@pulse("sine_60")
-def _sine_60(t):
-    return 15.0, 60.0 * np.sin(np.pi * t)
+# @pulse("sine_60")
+# def _sine_60(t):
+#     return 15.0, 60.0 * np.sin(np.pi * t)
 
 
-@pulse("sine_100")
-def _sine_100(t):
-    return 30.0, 100.0 * np.sin(np.pi * t)
+@pulse("sine_100_cos_60")
+def _sine_100_cos_60(t):
+    return 60.0 * np.cos(np.pi * t), 100.0 * np.sin(np.pi * t)
 
+@pulse("sine_100_cos_60_2_lobe")
+def _sine_100_cos_60_2_lobe(t):
+    return 60.0 * np.cos(2 * np.pi * t), 100.0 * np.sin(np.pi * t)
 
-@pulse("sine_160")
-def _sine_160(t):
-    return 45.0, 160.0 * np.sin(np.pi * t)
-
-
-@pulse("two_lobe")
-def _two_lobe(t):
-    return 25.0, 140.0 * np.sin(np.pi * t) * np.abs(np.sin(2 * np.pi * t))
-
-
-@pulse("multilobe_3")
-def _multilobe_3(t):
-    window = np.sin(np.pi * t)
-    return 20.0 + 20.0 * window, 120.0 * window * np.abs(np.sin(3 * np.pi * t))
-
-
-@pulse("flattop")
+@pulse("flattopdown")
 def _flattop(t):
-    return 35.0, 150.0 * np.clip(np.sin(np.pi * t) * 3.0, 0.0, 1.0)
+    return 35.0 * (1- np.clip(np.sin(np.pi * t) * 3.0, 0.0, 1.0)), 150.0 * np.clip(np.sin(np.pi * t) * 3.0, 0.0, 1.0)
 
-
-@pulse("gaussian_lobe")
-def _gaussian_lobe(t):
-    envelope = np.exp(-(((t - 0.5) / 0.18) ** 2))
-    return 30.0, 150.0 * envelope * np.sin(np.pi * t) ** 0.25
-
-
-@pulse("chirp_ramp")
-def _chirp_ramp(t):
-    return 10.0 + 40.0 * t, 120.0 * np.sin(np.pi * t)
-
-
-@pulse("high_alpha1_const")
-def _high_alpha1_const(t):
-    return 55.0, 80.0 * np.sin(np.pi * t)
-
-
-@pulse("random_smooth")
-def _random_smooth(t):
+@pulse("random")
+def _random(t):
     rng = np.random.default_rng(7)  # fixed seed -> reproducible "random" pulse
     window = np.sin(np.pi * t)
     alpha1 = _smooth(rng.uniform(10.0, 50.0, t.size))
-    alpha2 = _smooth(rng.uniform(20.0, 180.0, t.size)) * window
+    alpha2 = _smooth(rng.uniform(20.0, 180.0, t.size))
     return alpha1, alpha2
+
+
+# @pulse("sine_160")
+# def _sine_160(t):
+#     return 45.0, 160.0 * np.sin(np.pi * t)
+
+
+# @pulse("two_lobe")
+# def _two_lobe(t):
+#     return 25.0, 140.0 * np.sin(np.pi * t) * np.abs(np.sin(2 * np.pi * t))
+
+
+# @pulse("multilobe_3")
+# def _multilobe_3(t):
+#     window = np.sin(np.pi * t)
+#     return 20.0 + 20.0 * window, 120.0 * window * np.abs(np.sin(3 * np.pi * t))
+
+
+
+
+# @pulse("gaussian_lobe")
+# def _gaussian_lobe(t):
+#     envelope = np.exp(-(((t - 0.5) / 0.18) ** 2))
+#     return 30.0, 150.0 * envelope * np.sin(np.pi * t) ** 0.25
+
+
+# @pulse("chirp_ramp")
+# def _chirp_ramp(t):
+#     return 10.0 + 40.0 * t, 120.0 * np.sin(np.pi * t)
+
+
+# @pulse("high_alpha1_const")
+# def _high_alpha1_const(t):
+#     return 55.0, 80.0 * np.sin(np.pi * t)
+
+
+# @pulse("random_smooth")
+# def _random_smooth(t):
+#     rng = np.random.default_rng(7)  # fixed seed -> reproducible "random" pulse
+#     window = np.sin(np.pi * t)
+#     alpha1 = _smooth(rng.uniform(10.0, 50.0, t.size))
+#     alpha2 = _smooth(rng.uniform(20.0, 180.0, t.size)) * window
+#     return alpha1, alpha2
+
 
 
 def pulse_names():

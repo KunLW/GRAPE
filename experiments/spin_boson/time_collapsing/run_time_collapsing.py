@@ -189,11 +189,31 @@ def run_time_collapsing(
     fidelity_drop_tolerance=1e-4,
     max_rounds=20,
     maxiter=None,
+    total_time_us=None,
+    initial_pulse_npz=None,
+    top_dir=None,
 ):
+    """Shrink-and-reoptimize loop; see the module docstring.
+
+    ``total_time_us`` / ``initial_pulse_npz`` override the base config's
+    starting time and warm-start pulse; ``top_dir`` replaces the timestamped
+    output directory with a fixed one (idempotent reruns, e.g. Slurm tasks).
+    """
     base = _load_base_config(config_path)
     if maxiter is not None:
         base = replace(base, optimizer=replace(base.optimizer, maxiter=maxiter))
-    top_dir = timestamped_experiment_dir(resolved_output_root(base), "time_collapsing")
+    if total_time_us is not None:
+        base = replace(base, pulse=replace(base.pulse, total_time_us=total_time_us))
+    if initial_pulse_npz is not None:
+        base = replace(
+            base, runtime=replace(base.runtime, initial_pulse_npz=initial_pulse_npz)
+        )
+    if top_dir is None:
+        top_dir = timestamped_experiment_dir(
+            resolved_output_root(base), "time_collapsing"
+        )
+    else:
+        top_dir = Path(top_dir)
     top_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []

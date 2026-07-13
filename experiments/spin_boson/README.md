@@ -14,6 +14,7 @@ spin_boson/
 ├── initial_pulses/   # experiment: generate + screen a family of starting pulses
 ├── time_collapsing/  # Experiment 1: gate time shrinking
 ├── pulse_search/     # Experiment 2: multi-initial-pulse search (local or Slurm)
+├── slurm_time_shrink/# Experiment 1b: shrink every pulse-search winner from 3 start times (Slurm)
 ├── evaluation_check/ # sanity check: the four fidelity calculations along a run
 ├── reports/          # written reports for this system (git-tracked)
 ├── tmp/              # scratch; default output_root for ad-hoc runs (git-ignored)
@@ -58,6 +59,17 @@ Status: implemented in `pulse_search/` (see its README and `scc_deploy.md`
 for the USTC-SCC Slurm workflow). The
 `configs/spin_boson_{high,low}_static_fluc.yaml` configs here define its two
 noise scenarios; a completed gallery search is in `outputs/pulse_search_260709/`.
+
+### Experiment 1b: time shrinking at scale (`slurm_time_shrink/`)
+
+Combines the two: every final pulse from the pulse search is run through the
+time-collapsing loop from three starting total times (the original 225.8 µs,
+300 µs, and 170 µs), as a 30-task Slurm array on USTC-SCC. The search's final
+pulses are copied into the git-tracked `slurm_time_shrink/pulses/` so they
+reach the cluster.
+
+Status: implemented in `slurm_time_shrink/` (its README is the full deploy,
+monitoring, and result-retrieval guide).
 
 ### Experiment 3: noise robustness analysis (planned)
 

@@ -1,0 +1,66 @@
+{
+  "source_dir": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709",
+  "copied_at": "2026-07-10T22:36:33",
+  "pulses": {
+    "chirp_ramp": {
+      "file": "chirp_ramp_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/chirp_ramp/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9986931424269788,
+      "final_close_gate_fidelity": 0.999998113663376
+    },
+    "flattop": {
+      "file": "flattop_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/flattop/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9986561239514181,
+      "final_close_gate_fidelity": 0.9999839216580558
+    },
+    "gaussian_lobe": {
+      "file": "gaussian_lobe_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/gaussian_lobe/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9990220677622118,
+      "final_close_gate_fidelity": 0.999973689847332
+    },
+    "high_alpha1_const": {
+      "file": "high_alpha1_const_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/high_alpha1_const/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9987458993374,
+      "final_close_gate_fidelity": 0.9999968228334458
+    },
+    "multilobe_3": {
+      "file": "multilobe_3_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/multilobe_3/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9987079692801901,
+      "final_close_gate_fidelity": 0.9999920185179543
+    },
+    "random_smooth": {
+      "file": "random_smooth_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/random_smooth/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9988068400563144,
+      "final_close_gate_fidelity": 0.9999823456546232
+    },
+    "sine_100": {
+      "file": "sine_100_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/sine_100/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9988610686162115,
+      "final_close_gate_fidelity": 0.9999965871981479
+    },
+    "sine_160": {
+      "file": "sine_160_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/sine_160/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9987985814571286,
+      "final_close_gate_fidelity": 0.9999977696903983
+    },
+    "sine_60": {
+      "file": "sine_60_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/sine_60/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9989389145650502,
+      "final_close_gate_fidelity": 0.9999994327646589
+    },
+    "two_lobe": {
+      "file": "two_lobe_s400.npz",
+      "source": "/Users/kun/Documents/GRAPE VERGE/experiments/spin_boson/pulse_search/outputs/pulse_search_260709/two_lobe/final_pulse_s400.npz",
+      "final_noisy_gate_fidelity": 0.9988034792059963,
+      "final_close_gate_fidelity": 0.9999995115772948
+    }
+  }
+}
