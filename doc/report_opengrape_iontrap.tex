@@ -88,7 +88,7 @@ Let $F$ be the closed gate fidelity, which does not include the effect of fluctu
     \openf &= \frac{1}{N} \sum_{p,q}\expval{\bra{p,q}\hat U^\dagger {\mathcal{E}_\xi}\left(\ketbra{p_0,q};\vb c\right)\hat U \ket{p,q}}\\
     \mathcal{J} &= 1 - \openf + \lambda L_1
 \end{align*}
-where the set of $q$ spans the logical subspace. For a two-qubit gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{-}, \ket{+i}, \ket{-i}\}^{\otimes 2}$. Thus $N = 36$.
+where the set of $q$ spans the logical subspace. For a two-qubit gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{-}\}^{\otimes 2}$. Thus $N = 16$.
 
 
 
@@ -624,6 +624,9 @@ We finally get the effective Hamiltonian of one ion interacting with a bichromat
 \begin{align}
     H_k &= \frac{\Omega}{2} \eta (\sigma_+ e^{i\phi_s} + \sigma_- e^{-i\phi_s})(a_k e^{i(\delta t - \phi_m)} + a_k^\dagger e^{-i(\delta t - \phi_m)})
 \end{align}
+\begin{notebox}
+There exists global phase of bichromatic laser because this ``global'' is just global through the spin space. Since the system is considering the interaction between the motion and spin, this ``global'' phase is actually the phase difference between motion phase and laser phase. 
+\end{notebox}
 Define following two operators:
 \begin{equation}
     \begin{cases}
@@ -688,7 +691,7 @@ but the boundary condition of the control parameters should be carefully conside
 \subsection{Configuration}
 The system evolves under the following Hamiltonian:
 \begin{equation}
-    H = \alpha_1(t) (1 + \chi_1)\hat n + \alpha_2(t) (1+\chi_2)S^-_{\phi_s} \otimes \hat x_k + \xi_1 S_{\phi_s}^{+}\otimes \hat x_k + \xi_2 \hat n 
+    H = \alpha_1(t) (1 + \chi_1)\hat n + \alpha_2(t) \eta(1+\chi_2)S^-_{\phi_s} \otimes \hat x_k + \xi_1 S_{\phi_s}^{+} + \xi_2 \hat n 
 \end{equation}
 
 The bounds on the control parameters and the standard deviations of the fluctuations are given as follows:
@@ -696,8 +699,8 @@ The bounds on the control parameters and the standard deviations of the fluctuat
     &\alpha_1\in 2\pi \cdot[1, 600] kHz \\
     &\alpha_2\in 2\pi \cdot[0, 20] kHz \\
     &\alpha_2(0) = \alpha_2(T) = 0 \\
-    &\sigma(\chi_1) = 0.001,\quad \sigma(\chi_2) = 0.003 \\
-    &\sigma(\xi_1) = 2\pi \cdot 50Hz,\quad \sigma(\xi_2) = 2\pi \cdot 200Hz\\
+    &\sigma(\chi_1) = 0.0001,\quad \sigma(\chi_2) = 0.0001 \\
+    &\sigma(\xi_1) = 2\pi \cdot 5Hz,\quad \sigma(\xi_2) = 2\pi \cdot 20Hz\\
     & T = 225.8 \mu s
 \end{align*}
 
