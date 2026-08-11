@@ -1,0 +1,35 @@
+category,metric,scale,value,available,notes
+W,unitarity_fro_mean,,5.463105914572246e-16,True,nominal expm W^dagger W - I
+W,unitarity_fro_max,,1.0237890753736063e-15,True,nominal expm W^dagger W - I
+dW,sample_count,,16,True,sampled gradient coordinates
+dW,norm_first_minus_fd,,1.1750163856381252e-09,True,
+dW,norm_frechet_minus_fd,,1.1746855408282166e-09,True,
+dW,norm_first_minus_frechet,,9.026117409877294e-13,True,
+dW,relative_first_minus_fd,,1.1750163856381252e-09,True,
+dW,relative_frechet_minus_fd,,1.1746855408282166e-09,True,
+V,relative_fro_mean,,0.002255419167290423,True,
+V,relative_fro_median,,0.0023919720574300824,True,
+V,relative_fro_max,,0.0026891556347876243,True,
+V,relative_spectral_mean,,0.0022816618470184263,True,
+V,relative_spectral_max,,0.0026917316773200496,True,
+V,fidelity_leading,,0.9999979842969489,True,
+V,fidelity_frechet,,0.9999979859298751,True,
+V,fidelity_leading_minus_frechet,,-1.6329262386705068e-09,True,
+truncation,perturbative_fidelity,0.25,0.999999320254256,True,
+truncation,sigma_rms_spectral,0.25,41.60302618718319,True,
+truncation,sigma_mean_spectral,0.25,41.57267032934777,True,
+truncation,sigma_max_spectral,0.25,44.3923152129338,True,
+truncation,total_time,0.25,7.689881521585631e-05,True,
+truncation,sigmaT_squared_estimate,0.25,1.0235030511478782e-05,True,(sigma_rms_spectral * total_time)^2
+truncation,perturbative_fidelity,0.5,0.999999053062795,True,
+truncation,sigma_rms_spectral,0.5,83.20605237436638,True,
+truncation,sigma_mean_spectral,0.5,83.14534065869555,True,
+truncation,sigma_max_spectral,0.5,88.7846304258676,True,
+truncation,total_time,0.5,7.689881521585631e-05,True,
+truncation,sigmaT_squared_estimate,0.5,4.0940122045915127e-05,True,(sigma_rms_spectral * total_time)^2
+truncation,perturbative_fidelity,1.0,0.9999979842969489,True,
+truncation,sigma_rms_spectral,1.0,166.41210474873276,True,
+truncation,sigma_mean_spectral,1.0,166.2906813173911,True,
+truncation,sigma_max_spectral,1.0,177.5692608517352,True,
+truncation,total_time,1.0,7.689881521585631e-05,True,
+truncation,sigmaT_squared_estimate,1.0,0.0001637604881836605,True,(sigma_rms_spectral * total_time)^2

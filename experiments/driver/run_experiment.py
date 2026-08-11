@@ -30,6 +30,7 @@ from quantum_control import (
     SumProblem,
     faithful_gate_fidelity,
     ExpansionFidelity,
+    GrapeDifferentiator,
     StateAverageProblem,
     EvolutionContext,
     LindbladCorrectedStateFidelity,
@@ -47,6 +48,7 @@ from quantum_control import (
     closed_gate_fidelity,
     noisy_gate_fidelity,
 )
+from quantum_control.objectives.base import Objective
 from quantum_control.optimizers import ScipyOptimizer
 from quantum_control.pulses.pulse import PiecewiseConstantPulse
 
@@ -648,10 +650,16 @@ def plot_population_marginals(
     plt.close(fig)
 
 
-def format_experiment_note(config, result, metrics):
+def objective_label(open_system):
+    if not open_system.noise_terms:
+        return "closed_state_transfer_grape"
+    return "noisy_gate_fidelity_expansion"
+
+
+def format_experiment_note(config, result, metrics, objective="noisy_gate_fidelity_expansion"):
     return "\n".join(
         [
-            f"objective=noisy_gate_fidelity_expansion, system={config.system.type}",
+            f"objective={objective}, system={config.system.type}",
             (
                 f"n_steps={config.pulse.n_steps}, maxiter={config.optimizer.maxiter}, "
                 f"workers={config.runtime.workers}"
@@ -696,12 +704,14 @@ def system_params_rows(params):
     ]
 
 
-def print_experiment_report(config, result, metrics, outputs):
+def print_experiment_report(
+    config, result, metrics, outputs, objective="noisy_gate_fidelity_expansion"
+):
     print("\n=== Perturbative Open-Gate Optimization ===")
     print_section(
         "Configuration",
         [
-            ("objective", "noisy_gate_fidelity_expansion"),
+            ("objective", objective),
             ("system_type", config.system.type),
             *system_params_rows(config.system.params),
             ("include_fluctuations", config.system.noise.fluctuations.enabled),
@@ -835,7 +845,7 @@ def write_optimization_preview_report(
             ("Parameter", "Value"),
             [
                 ("experiment_dir", experiment_dir),
-                ("objective", "noisy_gate_fidelity_expansion"),
+                ("objective", objective_label(open_system)),
                 ("system_type", config.system.type),
                 *system_params_rows(config.system.params),
                 ("n_steps", config.pulse.n_steps),
@@ -1302,7 +1312,38 @@ def build_decoherence_correction_problem(
     )
 
 
+class NominalStateTransferFidelity(Objective):
+    """Target-agnostic state-transfer fidelity for ``StateAverageProblem``.
+
+    ``StateAverageProblem`` shares one objective instance across all state
+    pairs, while ``StateTransferFidelity`` binds a single target at
+    construction; this variant reads the per-pair ``initial_state`` and
+    ``target_state`` that ``NominalUnitaryEvolution`` records in
+    ``result.metadata``.
+    """
+
+    def evaluate(self, result):
+        final_state = result.U_total @ result.metadata["initial_state"]
+        amplitude = np.vdot(result.metadata["target_state"], final_state)
+        return float(np.abs(amplitude) ** 2)
+
+
 def build_objective_problem(config, open_system, initial_pulse, state_pairs):
+    if not open_system.noise_terms:
+        # Closed-only run (--close-grape, or noise fully disabled): plain
+        # unitary GRAPE instead of the perturbative expansion propagating a
+        # zero fluctuation Hamiltonian.
+        step_builder = UnitaryStepBuilder()
+        return StateAverageProblem(
+            system=open_system,
+            pulse=initial_pulse,
+            evolution=NominalUnitaryEvolution(step_builder),
+            objective=NominalStateTransferFidelity(),
+            differentiator=GrapeDifferentiator(step_builder),
+            state_pairs=state_pairs,
+            normalize_weights=config.objective.normalize_weights,
+            n_workers=config.runtime.workers,
+        )
     step_builder = PerturbativeStepBuilder()
     expansion_objective = ExpansionFidelity(
         max_order=config.objective.max_order,
@@ -1378,6 +1419,22 @@ def run_perturbative_experiment(
             print(warning, file=sys.stderr, flush=True)
     state_pairs = build_state_pairs(config)
     collapse_operators = open_system.collapse_operators
+    has_noise = bool(open_system.noise_terms)
+
+    def open_gate_fidelity(pulse, closed_value=None):
+        """Open-system gate fidelity; mirrors the closed value when noiseless."""
+        if not has_noise:
+            if closed_value is None:
+                closed_value = closed_gate_fidelity(system, pulse, state_pairs)
+            return closed_value
+        return noisy_gate_fidelity(
+            open_system,
+            pulse,
+            state_pairs,
+            collapse_operators=collapse_operators,
+            n_workers=config.runtime.workers,
+        )
+
     optimization_problem = build_objective_problem(config, open_system, initial_pulse, state_pairs)
     parameterized_problem = ParameterizedControlProblem(
         optimization_problem,
@@ -1452,22 +1509,14 @@ def run_perturbative_experiment(
         "parameters": np.asarray(initial_parameters, dtype=float),
         "pulse": masked_initial_pulse,
     }
+    initial_close_preview = closed_gate_fidelity(system, masked_initial_pulse, state_pairs)
     initial_preview_metrics = [
         ("initial_penalized_objective", initial_objective),
         ("initial_raw_fidelity", penalized_problem.raw_value(initial_parameters)),
-        (
-            "initial_close_gate_fidelity",
-            closed_gate_fidelity(system, masked_initial_pulse, state_pairs),
-        ),
+        ("initial_close_gate_fidelity", initial_close_preview),
         (
             "initial_noisy_gate_fidelity",
-            noisy_gate_fidelity(
-                open_system,
-                masked_initial_pulse,
-                state_pairs,
-                collapse_operators=collapse_operators,
-                n_workers=config.runtime.workers,
-            ),
+            open_gate_fidelity(masked_initial_pulse, closed_value=initial_close_preview),
         ),
         ("initial_l1_penalty", initial_l1_penalty),
         ("initial_l2_penalty", initial_l2_penalty),
@@ -1519,16 +1568,11 @@ def run_perturbative_experiment(
         pulse = penalized_problem.pulse_from_parameters(parameters)
         l1_penalty = penalty.l1_value(parameters, penalized_problem.parameter_shape)
         l2_penalty = penalty.l2_value(parameters, penalized_problem.parameter_shape)
+        close_fidelity = closed_gate_fidelity(system, pulse, state_pairs)
         step_log.append(
             step=step,
-            close_fidelity=closed_gate_fidelity(system, pulse, state_pairs),
-            open_fidelity=noisy_gate_fidelity(
-                open_system,
-                pulse,
-                state_pairs,
-                collapse_operators=collapse_operators,
-                n_workers=config.runtime.workers,
-            ),
+            close_fidelity=close_fidelity,
+            open_fidelity=open_gate_fidelity(pulse, closed_value=close_fidelity),
             cost_function=penalized_problem.value(parameters),
             raw_fidelity=penalized_problem.raw_value(parameters),
             l1_penalty=l1_penalty,
@@ -1645,19 +1689,11 @@ def run_perturbative_experiment(
         final_pulse,
         state_pairs,
     )
-    initial_noisy_gate_fidelity = noisy_gate_fidelity(
-        open_system,
-        masked_initial_pulse,
-        state_pairs,
-        collapse_operators=collapse_operators,
-        n_workers=config.runtime.workers,
+    initial_noisy_gate_fidelity = open_gate_fidelity(
+        masked_initial_pulse, closed_value=initial_close_gate_fidelity
     )
-    final_noisy_gate_fidelity = noisy_gate_fidelity(
-        open_system,
-        final_pulse,
-        state_pairs,
-        collapse_operators=collapse_operators,
-        n_workers=config.runtime.workers,
+    final_noisy_gate_fidelity = open_gate_fidelity(
+        final_pulse, closed_value=final_close_gate_fidelity
     )
 
     lower, upper = parameterization.bounds_for(final_pulse.amplitudes.shape)
@@ -1732,7 +1768,9 @@ def run_perturbative_experiment(
         "initial_penalized_objective": initial_objective,
         "final_penalized_objective": final_objective,
     }
-    experiment_note = format_experiment_note(config, result, metrics)
+    experiment_note = format_experiment_note(
+        config, result, metrics, objective=objective_label(open_system)
+    )
     plot_pulses(time_us, masked_initial_pulse, final_pulse, channels, pulse_path, note=experiment_note)
     has_propagation_plot = structure is not None and initial_states is not None
     if has_propagation_plot:
@@ -1799,7 +1837,9 @@ def run_perturbative_experiment(
         optimizer_options=optimizer_options,
     )
     if print_report:
-        print_experiment_report(config, result, metrics, outputs)
+        print_experiment_report(
+            config, result, metrics, outputs, objective=objective_label(open_system)
+        )
         print(f"experiment_dir={experiment_dir}")
         print(f"step_log={step_log_path}")
         if save_fidelity_terms:

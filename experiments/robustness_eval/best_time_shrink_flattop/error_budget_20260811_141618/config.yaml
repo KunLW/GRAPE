@@ -1,0 +1,59 @@
+system:
+  type: spin_boson
+  params:
+    n_levels: 6
+    phi_s: 0.0
+    eta: 0.075
+    mode_vector:
+    - 0.5
+    - -0.5
+    target_gate: ms_xx_pi_over_2
+    alpha1_khz_bounds:
+    - 1.0
+    - 60.0
+    alpha2_khz_bounds:
+    - 0.0
+    - 200.0
+    initial_pulse_shape: random
+    alpha1_cycles: 1.0
+    alpha1_offset_fraction: 0.7
+    alpha1_noise_fraction: 0.3
+  noise:
+    decoherence:
+      enabled: false
+      gamma_heating: 0.0
+      gamma_motional_dephasing: 0.0
+      gamma_spin_dephasing: 0.0
+    fluctuations:
+      enabled: true
+      sigma_static_spin_dephasing: 31.4159
+      sigma_static_motional_frequency: 30.0
+      sigma_control_alpha1_relative: 0.0001
+      sigma_control_alpha2_relative: 0.0001
+pulse:
+  n_steps: 400
+  total_time_us: 76.89881521585632
+  random_seed: 12345
+objective:
+  max_order: 2
+  drop_odd_average: true
+  normalize_weights: false
+optimizer:
+  method: L-BFGS-B
+  maxiter: 250
+  gtol: 1.0e-10
+  ftol: 1.0e-15
+  maximize: true
+penalty:
+  l1_smooth_weight: 0.0005
+  l2_smooth_weight: 0.0001
+runtime:
+  workers: 10
+  print_step: false
+  print_fidelity_terms: false
+  save_fidelity_terms: null
+  initial_pulse_npz: experiments/spin_boson/slurm_time_shrink/outputs/flattop__from_orig/round_20_T80.95us/pulse/final_pulse_s400.npz
+  no_progress: true
+output:
+  output_root: experiments/spin_boson/slurm_time_shrink/outputs
+  prefix: time-shrink

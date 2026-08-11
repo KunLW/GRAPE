@@ -1,0 +1,6 @@
+source,kind,strength,scaled_spectral_norm,noisy_gate_fidelity,infidelity_contribution,faithful_gate_fidelity,faithful_infidelity_contribution,close_grape_noisy_gate_fidelity,close_grape_infidelity_contribution,close_grape_faithful_gate_fidelity,close_grape_faithful_infidelity_contribution
+spin-shift,fluctuation-static,31.4159,31.4159,0.999998212426,1.19689173639e-06,,,0.999998306973,1.20390949909e-06,,
+motion-shift,fluctuation-static,30,150,0.999999201838,2.07479926906e-07,,,0.999999287996,2.2288566448e-07,,
+alpha1-rel,fluctuation-control,0.0001,0.0005,0.999999391379,1.79392732891e-08,,,0.99999949107,1.98118250694e-08,,
+alpha2-rel,fluctuation-control,0.0001,1.24659653758e-05,0.999999409151,1.67000080431e-10,,,0.999999510717,1.64954272464e-10,,
+all,total,,,0.999997984297,1.42502112488e-06,,,0.999998054756,1.45612635383e-06,,

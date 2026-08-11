@@ -1,7 +1,7 @@
 %% notes.cls — lightweight lecture-notes class (article-derived)
 %% Self-contained styling for technical physics notes.
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesClass{notes2}[2025/06/14 v1.0 lecture notes class]
+\ProvidesClass{simple-notes}[2025/06/14 v1.0 lecture notes class]
 
 % Pass all options to article (default 11pt).
 \DeclareOption*{\PassOptionsToClass{\CurrentOption}{article}}
@@ -45,7 +45,7 @@
 \RequirePackage{fancyhdr}
 \RequirePackage{titlesec}
 \titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.7em}{}
-\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsection}{\centering\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
 \titlespacing*{\section}{0pt}{1.4ex plus 1ex minus .2ex}{0.9ex plus .2ex}
 
 \pagestyle{fancy}

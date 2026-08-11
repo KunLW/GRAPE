@@ -1,4 +1,4 @@
-# GRAPE VERGE
+# GRAPE
 
 This repository contains a small modular quantum control engine. The important
 design choice is that fluctuation approximation is represented as perturbative

@@ -2010,12 +2010,79 @@ def test_yaml_config_unknown_keys_raise(tmp_path):
 def test_close_grape_flag_and_legacy_namespace_coerce():
     config = sbo.parse_args(["--close-grape"])
     assert not config.system.noise.fluctuations.enabled
+    assert not config.system.noise.decoherence.enabled
 
     legacy = SimpleNamespace(include_fluctuations=False, maxiter=2, n_steps=7)
     coerced = sbo._coerce_experiment_config(legacy)
     assert not coerced.system.noise.fluctuations.enabled
     assert coerced.optimizer.maxiter == 2
     assert coerced.pulse.n_steps == 7
+
+
+def test_build_objective_problem_uses_closed_path_without_noise(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  params:",
+                "    n_levels: 2",
+                "pulse:",
+                "  n_steps: 4",
+                "  random_seed: 7",
+                "runtime:",
+                "  workers: 1",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path), "--close-grape"])
+    _system, open_system = sbo.build_systems(config)
+    assert open_system.noise_terms == ()
+    initial_pulse = sbo.build_initial_pulse(config)
+    state_pairs = sbo.build_state_pairs(config)
+    with sbo.build_objective_problem(config, open_system, initial_pulse, state_pairs) as problem:
+        assert isinstance(problem, StateAverageProblem)
+        assert not isinstance(problem, SumProblem)
+        assert isinstance(problem.evolution, NominalUnitaryEvolution)
+        assert isinstance(problem.objective, sbo.NominalStateTransferFidelity)
+        assert isinstance(problem.differentiator, GrapeDifferentiator)
+        assert np.isfinite(problem.value())
+
+
+def test_close_grape_problem_matches_expansion_value_and_gradient():
+    n_levels = 2
+    closed = spin_boson_control_system(n_levels=n_levels, phi_s=0.0)
+    open_system = OpenSystem(drift=closed.drift, controls=closed.controls, noise_terms=())
+    pulse = PiecewiseConstantPulse(
+        np.array([[0.02, 0.01], [0.025, 0.015], [0.02, 0.005]], dtype=float),
+        dt=0.005,
+    )
+    state_pairs = motion_resolved_gate_state_pairs(ms_xx_pi_over_2_gate(), n_levels)
+    config = sbo.default_experiment_config()
+    config = _dc_replace(config, runtime=_dc_replace(config.runtime, workers=1))
+
+    with sbo.build_objective_problem(config, open_system, pulse, state_pairs) as closed_problem:
+        closed_value, closed_gradient = closed_problem.value_and_gradient()
+
+    # The pre-change objective for a noiseless system: the perturbative
+    # expansion propagating a zero fluctuation Hamiltonian.
+    step_builder = PerturbativeStepBuilder()
+    expansion_objective = ExpansionFidelity(max_order=2, drop_odd_average=True)
+    with StateAverageProblem(
+        system=open_system,
+        pulse=pulse,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=expansion_objective,
+        differentiator=PerturbativeExpansionDifferentiator(step_builder, expansion_objective),
+        state_pairs=state_pairs,
+        normalize_weights=config.objective.normalize_weights,
+        n_workers=1,
+    ) as expansion_problem:
+        expansion_value, expansion_gradient = expansion_problem.value_and_gradient()
+
+    assert np.isclose(closed_value, expansion_value, rtol=1e-12, atol=1e-13)
+    assert np.allclose(closed_gradient, expansion_gradient, rtol=1e-9, atol=1e-12)
 
 
 def test_experiment_writes_reloadable_config_snapshot(tmp_path):

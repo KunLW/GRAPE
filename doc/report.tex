@@ -1,4 +1,4 @@
-\documentclass{notes2}
+\documentclass{simple-notes}
 \usepackage{physics}
 \usepackage{amsmath}
 \usepackage{amssymb}
@@ -15,11 +15,49 @@
 \tableofcontents
 
 \newpage
-\section{GRAPE}
+\section{open-GRAPE}
+\subsection{Discretization}
+\begin{equation}
+    U(t, t_0) = \mathcal{T}\exp\left\{(-i)\int_{t_0}^{t}\dd s\mathcal{H}(s)\right\}
+\end{equation}
+Discretize into time slides $0 < t_1 < \cdots < t_N = T$, $t_{n+1} = t_n + \tau$.
 \begin{align*}
-    U_k = \mathcal{T}\exp\left\{(-i\tau)\int_{t_k}^{t_k+\tau}\dd s\mathcal{H}(s)\right\} \approx \exp\{-i\tau H(t_k)\} + O(\tau^2 \norm{H}^2) \\
+    U_k = \mathcal{T}\exp\left\{(-i)\int_{t_k}^{t_k+\tau}\dd s\mathcal{H}(s)\right\} \approx \exp\{-i H(t_k)\} + O(\tau^2 \norm{H}^2) \\
 \end{align*}
 We require $\kappa_1 = \tau \norm{H}\ll 1$.
+
+\subsection{Noise: Fluctuation and Decoherence}
+In addition to the original parametrized Hamiltonian, we also consider the uncertainty of the system. The Hamiltonian is then considered as a function of the random variables $\vb*\xi$ and $\vb*\chi$:
+\begin{equation}
+    H(t; \vb* \xi, \vb* \chi) = H_0(t) + \sum_m \xi_m(t) \cdot H_{\xi_m}+ \sum_{i} c_i(t) [H_i + \chi_i(t) H_{\chi_i}]
+    \label{eq:total_hamiltonian}
+\end{equation}
+where $\xi$ and $\chi$ are zero-mean random variables that describe the fluctuation of the system.
+
+Two limiting cases of the time correlation of the fluctuation are considered. The first is the limit of infinitely long time correlation, i.e., $\xi$ is a random variable that stays constant throughout the gate operation. The second is the limit of infinitely short time correlation, i.e., $\xi$ is a random variable that is independent at different times.
+The correlation functions for each are
+\begin{align}
+    \text{long time correlation (fluctuation): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \\
+    \text{short time correlation (decoherence): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \delta(t - t')
+\end{align}
+Long time correlation is treated as the fluctuation of the system, while short time correlation is treated as the Markovian noise of the system, which can be described by the Lindblad master equation.
+Thus the evolution of the system can be described by the following equation:
+\begin{equation}
+    \dot \rho = -i[H(t; \vb* \xi, \vb* \chi), \rho] + \sum_j  (L_j \rho L_j^\dagger - \frac{1}{2} L_j^\dagger L_j \rho - \frac{1}{2} \rho L_j^\dagger L_j)
+\end{equation}
+The Lindblad form arises from the short time correlation limit; in the long time correlation limit, $\xi$ and $\chi$ reduce to time-independent random variables.
+
+\subsection{Gate Fidelity and Cost Function}
+Let $F$ be the closed gate fidelity, which does not include the effect of fluctuation and noise, and let $\mathcal{F}$ be the open gate fidelity, which faithfully describes the system under fluctuation and noise. Let $\mathcal{J}$ be the real function that we actually minimize.
+\begin{align*}
+    \closef &= \frac{1}{N} \sum_{p,q}\bra{p,q}\hat U^\dagger U(0, T; \vb c)\ketbra{p_0,q} U(0, T; \vb c)^\dagger \hat U \ket{p,q}\\
+    \openf &= \frac{1}{N} \sum_{p,q}\expval{\bra{p,q}\hat U^\dagger {\mathcal{E}_\xi}\left(\ketbra{p_0,q};\vb c\right)\hat U \ket{p,q}}\\
+    \mathcal{J} &= 1 - \openf + \lambda L_1
+\end{align*}
+where the set of $q$ spans the logical subspace. For a two-qubit gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{i+}\}^{\otimes 2}$. Thus $N = 16$.
+
+
+\subsection{perturbative expectation lemma}
 \begin{lemma}[Recursive Calculation of the Gradient of Perturbative Expectation]
     For an expectation value of the form
     \begin{equation}
@@ -60,36 +98,6 @@ Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different 
     %TODO: make the example more precise and correct them, then add the non-Markovian example with Discriminator noise.
 
 \end{example}
-\section{Noise: Fluctuation and Decoherence}
-In addition to the original parametrized Hamiltonian, we also consider the uncertainty of the system. The Hamiltonian is then considered as a function of the random variables $\vb*\xi$ and $\vb*\chi$:
-\begin{equation}
-    H(t; \vb* \xi, \vb* \chi) = H_0(t) + \sum_m \xi_m(t) \cdot H_{\xi_m}+ \sum_{i} c_i(t) [H_i + \chi_i(t) H_{\chi_i}]
-    \label{eq:total_hamiltonian}
-\end{equation}
-where $\xi$ and $\chi$ are zero-mean random variables that describe the fluctuation of the system.
-
-Two limiting cases of the time correlation of the fluctuation are considered. The first is the limit of infinitely long time correlation, i.e., $\xi$ is a random variable that stays constant throughout the gate operation. The second is the limit of infinitely short time correlation, i.e., $\xi$ is a random variable that is independent at different times.
-The correlation functions for each are
-\begin{align}
-    \text{long time correlation (fluctuation): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \\
-    \text{short time correlation (decoherence): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \delta(t - t')
-\end{align}
-Long time correlation is treated as the fluctuation of the system, while short time correlation is treated as the Markovian noise of the system, which can be described by the Lindblad master equation.
-Thus the evolution of the system can be described by the following equation:
-\begin{equation}
-    \dot \rho = -i[H(t; \vb* \xi, \vb* \chi), \rho] + \sum_j  (L_j \rho L_j^\dagger - \frac{1}{2} L_j^\dagger L_j \rho - \frac{1}{2} \rho L_j^\dagger L_j)
-\end{equation}
-The Lindblad form arises from the short time correlation limit; in the long time correlation limit, $\xi$ and $\chi$ reduce to time-independent random variables.
-
-\section{Gate Fidelity and Cost Function}
-Let $F$ be the closed gate fidelity, which does not include the effect of fluctuation and noise, and let $\mathcal{F}$ be the open gate fidelity, which faithfully describes the system under fluctuation and noise. Let $\mathcal{J}$ be the real function that we actually minimize.
-\begin{align*}
-    \closef &= \frac{1}{N} \sum_{p,q}\bra{p,q}\hat U^\dagger U(0, T; \vb c)\ketbra{p_0,q} U(0, T; \vb c)^\dagger \hat U \ket{p,q}\\
-    \openf &= \frac{1}{N} \sum_{p,q}\expval{\bra{p,q}\hat U^\dagger {\mathcal{E}_\xi}\left(\ketbra{p_0,q};\vb c\right)\hat U \ket{p,q}}\\
-    \mathcal{J} &= 1 - \openf + \lambda L_1
-\end{align*}
-where the set of $q$ spans the logical subspace. For a two-qubit gate, the logical subspace is spanned by $\{\ket{0}, \ket{1}, \ket{+}, \ket{-}\}^{\otimes 2}$. Thus $N = 16$.
-
 
 
 \subsection{Gradient with Fluctuation}
@@ -695,6 +703,8 @@ The system evolves under the following Hamiltonian:
 \end{equation}
 
 The bounds on the control parameters and the standard deviations of the fluctuations are given as follows:
+% REVIEW: the experiment configs (experiments/spin_boson/configs/*.yaml) use alpha_1 in 2pi*[1, 60] kHz and alpha_2 in 2pi*[0, 200] kHz — the 600/20 below look like transposed zeros.
+% REVIEW: the configured value of sigma(xi_2) is 30 rad/s (approx 2pi * 4.8 Hz), not 2pi * 20 Hz.
 \begin{align*}
     &\alpha_1\in 2\pi \cdot[1, 600] kHz \\
     &\alpha_2\in 2\pi \cdot[0, 20] kHz \\
@@ -703,6 +713,124 @@ The bounds on the control parameters and the standard deviations of the fluctuat
     &\sigma(\xi_1) = 2\pi \cdot 5Hz,\quad \sigma(\xi_2) = 2\pi \cdot 20Hz\\
     & T = 225.8 \mu s
 \end{align*}
+
+\subsection{Experiment 1: pulse searching}
+GRAPE is a local gradient method: from a given initial guess, L-BFGS-B converges to a stationary point inside the basin of attraction of that guess, so a single run samples exactly one basin of the control landscape. Experiment 1 therefore searches over basins. We prepared a gallery of ten named initial pulses --- sinusoidal $\alpha_2$ envelopes of different periods (\texttt{sine\_60}, \texttt{sine\_100}, \texttt{sine\_160}), multi-lobe envelopes (\texttt{two\_lobe}, \texttt{multilobe\_3}, \texttt{gaussian\_lobe}), a chirped ramp (\texttt{chirp\_ramp}), a constant high-$\alpha_1$ profile (\texttt{high\_alpha1\_const}), a flat-top profile (\texttt{flattop}) and a smoothed random profile (\texttt{random\_smooth}) --- and optimized each one independently under an identical configuration, one task per initial pulse (Slurm job array on USTC-SCC). Figure~\ref{fig:exp1-gallery} shows the gallery and the resulting optimized pulses.
+
+All runs share $T = 225.8\,\mu s$, $N = 400$ steps, and at most $400$ L-BFGS-B iterations with smoothness penalties $\lambda_{L1} = 5\times 10^{-4}$, $\lambda_{L2} = 10^{-4}$. The gate fidelity is averaged over $96$ weighted state pairs: the $16$ logical two-qubit states $\{\ket 0, \ket 1, \ket +, \ket{+i}\}^{\otimes 2}$, with each target resolved over the $6$ motional levels. This experiment used a \emph{strong}-fluctuation scenario, ten times the static deviations of the Configuration above: $\sigma(\xi_1) = 2\pi\cdot 50\,\mathrm{Hz} = 314.16\,\mathrm{rad/s}$, $\sigma(\xi_2) = 300\,\mathrm{rad/s}$, $\sigma(\chi_1)=\sigma(\chi_2)=10^{-4}$.
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lccc}
+        \hline
+        initial pulse & initial $\openf$ & final $\openf$ & final $\closef$ \\
+        \hline
+        \texttt{gaussian\_lobe}     & 0.685066 & 0.999022 & 0.999974 \\
+        \texttt{sine\_60}           & 0.643901 & 0.998939 & 0.999999 \\
+        \texttt{sine\_100}          & 0.683796 & 0.998861 & 0.999997 \\
+        \texttt{random\_smooth}     & 0.674495 & 0.998807 & 0.999982 \\
+        \texttt{two\_lobe}          & 0.714529 & 0.998803 & 1.000000 \\
+        \texttt{sine\_160}          & 0.782220 & 0.998799 & 0.999998 \\
+        \texttt{high\_alpha1\_const}& 0.584793 & 0.998746 & 0.999997 \\
+        \texttt{multilobe\_3}       & 0.624254 & 0.998708 & 0.999992 \\
+        \texttt{chirp\_ramp}        & 0.760213 & 0.998693 & 0.999998 \\
+        \texttt{flattop}            & 0.949247 & 0.998656 & 0.999984 \\
+        \hline
+    \end{tabular}
+    \caption{Pulse search over ten initial-pulse basins (strong fluctuations, $T = 225.8\,\mu s$), sorted by final noisy gate fidelity $\openf$. $\closef$ is the closed-system gate fidelity of the same optimized pulse.}
+    \label{tab:exp1-search}
+\end{table}
+
+Table~\ref{tab:exp1-search} summarizes the search. The initial noisy fidelities span $0.58$--$0.95$, yet every basin converges to nearly the same place: final $\openf$ between $0.998656$ and $0.999022$ (a spread of only $4\times10^{-4}$), with closed fidelities $\closef \geq 0.99997$ throughout. Two conclusions follow. First, at fixed gate time the reachable noisy fidelity is essentially basin-independent: the residual infidelity of $\sim 10^{-3}$ is set by the strong quasi-static noise, not by the pulse shape. Second, the ranking at fixed $T$ does not predict which shape survives gate-time compression --- \texttt{flattop}, last in this table, becomes the clear winner of Experiment 2.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.78\textwidth]{../experiments/spin_boson/reports/src/preview.png}\\[4pt]
+    \includegraphics[width=0.7\textwidth]{../experiments/spin_boson/reports/src/final_pulses_grid.png}
+    \caption{Experiment 1. Top: the gallery of initial pulses ($\alpha_1$, $\alpha_2$ per panel). Bottom: the corresponding optimized pulses; distinct basins yield visibly different waveforms at nearly identical fidelity.}
+    \label{fig:exp1-gallery}
+\end{figure}
+
+\subsection{Experiment 2: time shrinking}
+At leading order a quasi-static fluctuation contributes an infidelity $\propto (\sigma T)^2$, so a shorter gate is quadratically less sensitive --- provided re-optimization can keep the closed-system fidelity. Experiment 2 compresses the gate time by a multiplicative shrink loop: starting from an optimized pulse, each round sets $T \to 0.95\,T$ with $N = 400$ fixed (only the step duration shrinks; the amplitudes carry over), then re-optimizes warm-started from the previous round (at most $250$ iterations). The loop stops when the noisy gate fidelity drops more than $10^{-4}$ below the previous round, or after $30$ rounds; the reported result is the round with the highest $\openf$.
+
+Every final pulse of Experiment 1 was fed through this loop from three starting gate times ($225.8$, $300$ and $170\,\mu s$), giving $30$ independent tasks (Slurm array). Unlike the search, this experiment used the \emph{weak}-fluctuation scenario of the Configuration: $\sigma(\xi_1) = 2\pi\cdot 5\,\mathrm{Hz} = 31.416\,\mathrm{rad/s}$, $\sigma(\xi_2) = 30\,\mathrm{rad/s}$. The jump in fidelity between Table~\ref{tab:exp1-search} and Table~\ref{tab:exp2-shrink} ($\openf \sim 0.999$ to $\openf > 0.9999$) reflects this change of noise level, not an improvement of the pulses.
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lcccc}
+        \hline
+        pulse & start $T$ ($\mu s$) & best $T$ ($\mu s$) & $\openf$ & $\closef$ \\
+        \hline
+        \texttt{flattop}            & 225.8 & \textbf{76.90} & 0.999998 & 0.999999 \\
+        \texttt{gaussian\_lobe}     & 170   & 124.97 & 0.999941 & 0.999945 \\
+        \texttt{high\_alpha1\_const}& 170   & 138.47 & 0.999995 & 0.999999 \\
+        \texttt{sine\_160}          & 300   & 138.99 & 0.999996 & 1.000000 \\
+        \texttt{sine\_100}          & 300   & 154.00 & 0.999995 & 1.000000 \\
+        \texttt{random\_smooth}     & 170   & 161.50 & 0.999993 & 0.999999 \\
+        \texttt{chirp\_ramp}        & 170   & 170.00 & 0.999978 & 0.999986 \\
+        \texttt{multilobe\_3}       & 170   & 170.00 & 0.999992 & 0.999998 \\
+        \texttt{sine\_60}           & 170   & 170.00 & 0.999947 & 0.999954 \\
+        \texttt{two\_lobe}          & 170   & 170.00 & 0.999988 & 0.999996 \\
+        \hline
+    \end{tabular}
+    \caption{Time shrinking (weak fluctuations): for each pulse, the shortest best gate time reached over the three starting times, with the fidelities of that round. Rows with best $T = 170\,\mu s$ started there and never improved on the starting time; fidelity values are as logged (rounded to six digits).}
+    \label{tab:exp2-shrink}
+\end{table}
+
+Table~\ref{tab:exp2-shrink} lists, for each pulse, the shortest gate time reached over the three starts. Most shapes stall between $125$ and $170\,\mu s$. The \texttt{flattop} pulse is the outlier: starting from $225.8\,\mu s$ it shrinks for $21$ consecutive rounds down to
+\begin{equation*}
+    T = 76.90\,\mu s, \qquad \openf = 0.999998, \qquad \closef = 0.9999994,
+\end{equation*}
+a $2.9\times$ compression of the original gate time, with perturbative validity parameters $\kappa_1 = 0.368$ and $\kappa_2 = 0.0285$ at the final duration. The stop criterion triggered at round $23$ ($\openf = 0.99936 < 0.99998 - 10^{-4}$), indicating that below ${\sim}77\,\mu s$ re-optimization within the amplitude bounds can no longer support the gate. Notably, the noisy fidelity \emph{increases} monotonically while shrinking (e.g.\ from $0.999962$ at $225.8\,\mu s$), as expected from the $(\sigma T)^2$ scaling of the dominant static fluctuations. Figure~\ref{fig:exp2-best} shows the fidelity--time trade-off across all $30$ tasks and the winning waveform.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.62\textwidth]{../experiments/spin_boson/reports/src/best_time_vs_fidelity.png}\\[4pt]
+    \includegraphics[width=0.49\textwidth]{../experiments/spin_boson/reports/src/round_21_T76.90us/pulse.png}\hfill
+    \includegraphics[width=0.49\textwidth]{../experiments/spin_boson/reports/src/round_21_T76.90us/population.png}
+    \caption{Experiment 2. Top: best gate time vs.\ noisy fidelity for all $30$ shrink tasks. Bottom: the winning \texttt{flattop} pulse at $T=76.90\,\mu s$ (left) and the population evolution of the probe state $\ket{00}\otimes\ket{n=0}$ under it (right).}
+    \label{fig:exp2-best}
+\end{figure}
+
+\subsection{Experiment 3: robustness evaluation}
+Experiment 3 measures how the optimal pulse degrades as the noise grows. A global scale factor $\lambda$ multiplies all four fluctuation deviations simultaneously (decoherence stays disabled), and the pulse is evaluated at $30$ logarithmically spaced points $\lambda \in [0.01, 20]$ around the nominal weak-fluctuation scenario ($\lambda = 1$); the closed fidelity $\closef$ is the $\lambda \to 0$ asymptote. The evaluation is the same second-order perturbative $\openf$ used as the optimization objective, so large-$\lambda$ values are qualitative --- the expansion parameter itself grows as $(\lambda\sigma T)^2$.
+
+The $76.90\,\mu s$ open-GRAPE pulse is compared against two closed-GRAPE references, i.e.\ pulses optimized with all noise terms disabled: one at the original $T = 225.8\,\mu s$, and one at the \emph{same} gate time $T = 76.90\,\mu s$. Each comparison pulse is evaluated on its own time grid under the identical scaled noise model.
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lcccc}
+        \hline
+        pulse & $T$ ($\mu s$) & $\closef$ & $\openf$ at $\lambda \approx 1.12$ & $\openf$ at $\lambda = 20$ \\
+        \hline
+        open-GRAPE (best)   & 76.90 & 0.99999941 & 0.99999762 & 0.999429 \\
+        closed-GRAPE        & 76.90 & 0.99999951 & 0.99999769 & 0.999417 \\
+        closed-GRAPE        & 225.8 & 0.99999937 & 0.99997989 & 0.993777 \\
+        \hline
+    \end{tabular}
+    \caption{Robustness of the best pulse vs.\ two closed-GRAPE references under globally scaled fluctuations ($\lambda = 1$ is the nominal weak scenario).}
+    \label{tab:exp3-robustness}
+\end{table}
+
+Table~\ref{tab:exp3-robustness} and Figure~\ref{fig:exp3-robustness} summarize the sweep. Three observations:
+\begin{enumerate}
+    \item The infidelity of the best pulse grows quadratically in $\lambda$, as expected for zero-mean quasi-static noise at second order; at the nominal $\lambda = 1$ the noise adds only ${\sim}2\times10^{-6}$ to the closed-system infidelity, and the fidelity stays above $0.9994$ even at $\lambda = 20$.
+    \item Gate time dominates robustness. Against the $225.8\,\mu s$ reference the short pulse is ${\sim}11\times$ more robust at $\lambda = 20$ ($5.7\times10^{-4}$ vs.\ $6.2\times10^{-3}$ infidelity), consistent with the $(\sigma T)^2$ scaling of the static terms, $(225.8/76.9)^2 \approx 8.6$.
+    \item At \emph{equal} gate time the open-GRAPE and closed-GRAPE pulses are equally robust to within a few percent at every $\lambda$. At this noise level, pulse shaping does not additionally suppress the static dephasing; the practical value of the open-system objective in this study is therefore not reshaping the pulse at fixed $T$, but steering and certifying the time-shrinking loop of Experiment 2, whose stop criterion is the noisy fidelity itself.
+\end{enumerate}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{../experiments/spin_boson/reports/src/robustness.png}\\[4pt]
+    \includegraphics[width=0.75\textwidth]{../experiments/spin_boson/reports/src/robustness_same_time.png}
+    \caption{Experiment 3: gate infidelity $1-\openf$ (log axis) vs.\ noise scale $\lambda$. Top: best $76.90\,\mu s$ pulse against the closed-GRAPE pulse at $225.8\,\mu s$. Bottom: the same against the closed-GRAPE pulse at the same $76.90\,\mu s$ gate time --- the two curves nearly coincide. Dotted lines mark the closed-fidelity ($\lambda \to 0$) references.}
+    \label{fig:exp3-robustness}
+\end{figure}
+
+\subsection{Experiment 4: error budget analysis}
+
+
 
 \nocite{*}
 \printbibliography
