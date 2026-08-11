@@ -18,7 +18,7 @@ drawn as a horizontal dashed line on the log-scaled scale axis.
 Run from the repository root:
 
 ```bash
-.venv/bin/python -m experiments.robustness_eval.run_robustness_eval \
+.venv/bin/python -m experiments.spin_boson.robustness_eval.run_robustness_eval \
     --config <config.yaml> --pulse-npz <pulse.npz>
 ```
 
