@@ -32,7 +32,7 @@ with ``--output-root``): ``error_budget.csv``, ``error_budget.png``,
 
 Run from the repository root:
 
-    .venv/bin/python -m experiments.robustness_eval.run_error_budget \
+    .venv/bin/python -m experiments.spin_boson.robustness_eval.run_error_budget \
         --config <config.yaml> --pulse-npz <pulse.npz>
 """
 
@@ -61,7 +61,7 @@ from experiments.driver.run_experiment import (
 )
 from experiments.driver.config_io import write_config_snapshot
 from experiments.driver.reporting import timestamped_experiment_dir
-from experiments.robustness_eval.run_robustness_eval import (
+from experiments.spin_boson.robustness_eval.run_robustness_eval import (
     load_comparison_pulse,
     load_pulse,
 )
