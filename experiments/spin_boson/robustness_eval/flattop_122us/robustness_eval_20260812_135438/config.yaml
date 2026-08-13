@@ -21,8 +21,15 @@ system:
   noise:
     decoherence:
       enabled: false
+      gamma_heating: 0.0
+      gamma_motional_dephasing: 0.0
+      gamma_spin_dephasing: 0.0
     fluctuations:
-      enabled: false
+      enabled: true
+      sigma_static_spin_dephasing: 31.4159
+      sigma_static_motional_frequency: 30.0
+      sigma_control_alpha1_relative: 0.0001
+      sigma_control_alpha2_relative: 0.0001
 pulse:
   n_steps: 400
   total_time_us: 122.01330779422334
@@ -34,19 +41,19 @@ objective:
 optimizer:
   method: L-BFGS-B
   maxiter: 250
-  gtol: 1.0e-12
+  gtol: 1.0e-10
   ftol: 1.0e-15
   maximize: true
 penalty:
-  l1_smooth_weight: 1.0e-7
-  l2_smooth_weight: 1.0e-5
+  l1_smooth_weight: 0.0005
+  l2_smooth_weight: 0.0001
 runtime:
   workers: 10
   print_step: false
   print_fidelity_terms: false
   save_fidelity_terms: null
-  initial_pulse_npz: experiments/spin_boson/robustness_eval/best_time_shrink_flattop/random_smooth_s400.npz
+  initial_pulse_npz: null
   no_progress: true
 output:
   output_root: experiments/spin_boson/robustness_eval/flattop_122us/outputs
-  prefix: close-122us
+  prefix: flattop-122us
