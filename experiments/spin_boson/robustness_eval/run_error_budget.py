@@ -10,8 +10,10 @@ infidelity attributable to source ``i`` is
 
 and because the perturbative expansion is second order in independent
 zero-mean fluctuations (and the Lindblad correction first order in the
-rates), the contributions are additive at leading order: the summary reports
-the residual ``(F_closed - F_all) - sum_i eps_i`` as a consistency check.
+rates), the contributions are additive at leading order: each output also
+states ``eps_i`` as a percentage of the all-terms total ``F_closed - F_all``,
+and the summary reports the residual ``(F_closed - F_all) - sum_i eps_i``
+as a consistency check.
 
 ``--faithful`` additionally computes the exact ``faithful_gate_fidelity``
 per source (full Lindblad propagation with Gauss-Hermite averaging; with a
@@ -82,13 +84,25 @@ CSV_COLUMNS = (
     "scaled_spectral_norm",
     "noisy_gate_fidelity",
     "infidelity_contribution",
+    "pct_of_total",
     "faithful_gate_fidelity",
     "faithful_infidelity_contribution",
+    "faithful_pct_of_total",
     "close_grape_noisy_gate_fidelity",
     "close_grape_infidelity_contribution",
+    "close_grape_pct_of_total",
     "close_grape_faithful_gate_fidelity",
     "close_grape_faithful_infidelity_contribution",
+    "close_grape_faithful_pct_of_total",
 )
+
+# Contribution column -> the column holding its share of the all-terms total.
+PCT_COLUMNS = {
+    "infidelity_contribution": "pct_of_total",
+    "faithful_infidelity_contribution": "faithful_pct_of_total",
+    "close_grape_infidelity_contribution": "close_grape_pct_of_total",
+    "close_grape_faithful_infidelity_contribution": "close_grape_faithful_pct_of_total",
+}
 
 
 def parse_args(argv=None):
@@ -252,6 +266,21 @@ def evaluate_budget(open_system, sources, pulse, state_pairs, closed_fidelity, a
     return rows
 
 
+def add_percentages(rows):
+    """Store each contribution's share of the all-terms total in every row."""
+    total = next(row for row in rows if row["source"] == "all")
+    for contribution_column, pct_column in PCT_COLUMNS.items():
+        denominator = total.get(contribution_column)
+        for row in rows:
+            value = row.get(contribution_column)
+            row[pct_column] = (
+                None
+                if value is None or not denominator
+                else 100.0 * value / denominator
+            )
+    return rows
+
+
 def additivity_residual(rows):
     """(F_closed - F_all) - sum of per-source contributions."""
     total = next(row for row in rows if row["source"] == "all")
@@ -350,8 +379,9 @@ def plot_budget(rows, output_path, *, compare, close_grape_time_us, pulse_time_u
             label=label,
         )
         for index, value in points:
+            pct = ordered[index].get(PCT_COLUMNS[column])
             ax.annotate(
-                f"{value:.2e}",
+                f"{value:.2e}" + ("" if pct is None else f" ({pct:.3g}%)"),
                 (value, y[index] + offset),
                 xytext=(4, 0),
                 textcoords="offset points",
@@ -384,8 +414,12 @@ def write_report(
     validity_outputs,
     wall_s,
 ):
-    def fmt(value):
-        return "not computed" if value is None else f"{value:.12g}"
+    def fmt(column, value):
+        if value is None:
+            return "not computed"
+        if column in PCT_COLUMNS.values():
+            return f"{value:.4g}%"
+        return f"{value:.12g}"
 
     compare = close_grape_closed_fidelity is not None
     lines = [
@@ -397,7 +431,9 @@ def write_report(
         "(`noisy_gate_fidelity`; strengths as configured). The contribution "
         "is `F_closed - F_only_source`; at leading order the contributions "
         "add up to the all-terms row, and the residual below measures how "
-        "well they do.",
+        "well they do. `pct_of_total` states each contribution as a "
+        "percentage of the all-terms total `F_closed - F_all`, so the "
+        "per-source shares sum to 100% minus that residual.",
         "",
         "## Run Summary",
         "",
@@ -427,15 +463,30 @@ def write_report(
         "## Budget",
         "",
     ]
-    columns = ["strength", "scaled_spectral_norm", "noisy_gate_fidelity", "infidelity_contribution"]
+    columns = [
+        "strength",
+        "scaled_spectral_norm",
+        "noisy_gate_fidelity",
+        "infidelity_contribution",
+        "pct_of_total",
+    ]
     if args.faithful:
-        columns += ["faithful_gate_fidelity", "faithful_infidelity_contribution"]
+        columns += [
+            "faithful_gate_fidelity",
+            "faithful_infidelity_contribution",
+            "faithful_pct_of_total",
+        ]
     if compare:
-        columns += ["close_grape_noisy_gate_fidelity", "close_grape_infidelity_contribution"]
+        columns += [
+            "close_grape_noisy_gate_fidelity",
+            "close_grape_infidelity_contribution",
+            "close_grape_pct_of_total",
+        ]
         if args.faithful:
             columns += [
                 "close_grape_faithful_gate_fidelity",
                 "close_grape_faithful_infidelity_contribution",
+                "close_grape_faithful_pct_of_total",
             ]
     lines += [
         "| source | kind | " + " | ".join(columns) + " |",
@@ -444,7 +495,7 @@ def write_report(
     for row in rows:
         lines.append(
             f"| {row['source']} | {row['kind']} | "
-            + " | ".join(fmt(row.get(column)) for column in columns)
+            + " | ".join(fmt(column, row.get(column)) for column in columns)
             + " |"
         )
     lines += [
@@ -551,6 +602,7 @@ def main():
             workers,
         )
         rows = merge_comparison(rows, close_grape_rows)
+    rows = add_percentages(rows)
 
     validity_outputs = None
     if args.validity:
