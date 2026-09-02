@@ -569,7 +569,15 @@ An external laser field can be applied to the ions. The interaction between an $
 H =  \omega_k a_k^\dagger a_k +  \frac{\omega_0}{2} \sigma_z +  {\Omega} \cos(k x - \omega t + \phi)\sigma_x \quad \text{(set $\hslash = 1$)}
 \end{equation}
 
-where $\Omega$ is the Rabi frequency for the laser interacting with the certain ion, $k$ is the wavevector of the laser, $x$ is the position of the ion, $\omega$ is the frequency of the laser, and $\phi$ is the phase of the laser. The position of the ion can be quantized as $x = x_0 (a_k + a_k^\dagger)$, where $x_0$ is the size of the motional state of the ion determined by the trap frequency, $a_k$ and $a_k^\dagger$ are the annihilation and creation operators of the motional mode $k$. Use the transformation $\cos\theta = \frac{1}{2} (e^{i\theta} + e^{-i\theta})$, we can rewrite the Hamiltonian as:
+
+where $\Omega$ is the Rabi frequency for the laser interacting with the certain ion, $k$ is the wavevector of the laser, $x$ is the position of the ion, $\omega$ is the frequency of the laser, and $\phi$ is the phase of the laser. 
+It is easy to be confused that when the laser is time-dependent, the external field should be changed. 
+Here is the hamiltonian after extend to the time-dependent laser field:
+\begin{equation}
+H =  \omega_k a_k^\dagger a_k +  \frac{\omega_0}{2} \sigma_z +  {\Omega} \cos(k x - {\int_0^t\omega(s) \dd s} + \phi(t))\sigma_x 
+\end{equation}
+
+The position of the ion can be quantized as $x = x_0 (a_k + a_k^\dagger)$, where $x_0$ is the size of the motional state of the ion determined by the trap frequency, $a_k$ and $a_k^\dagger$ are the annihilation and creation operators of the motional mode $k$. Use the transformation $\cos\theta = \frac{1}{2} (e^{i\theta} + e^{-i\theta})$, we can rewrite the Hamiltonian as:
 \begin{equation}
     H =  \omega_k a_k^\dagger a_k +  \frac{\omega_0}{2} \sigma_z +  \frac{\Omega}{2} (e^{i(k x - \omega t + \phi)} + e^{-i(k x - \omega t + \phi)})\sigma_x 
 \end{equation}
@@ -633,15 +641,20 @@ We finally get the effective Hamiltonian of one ion interacting with a bichromat
     H_k &= \frac{\Omega}{2} \eta (\sigma_+ e^{i\phi_s} + \sigma_- e^{-i\phi_s})(a_k e^{i(\delta t - \phi_m)} + a_k^\dagger e^{-i(\delta t - \phi_m)})
 \end{align}
 \begin{notebox}
-There exists global phase of bichromatic laser because this ``global'' is just global through the spin space. Since the system is considering the interaction between the motion and spin, this ``global'' phase is actually the phase difference between motion phase and laser phase. 
+There exists global phase of bichromatic laser because this ``global'' is just global through the spin space. Since the system is considering the interaction between the motion and spin, this ``global'' phase is actually the phase difference between motion phase and laser phase. At the time reference $t=0$. Notice, this global phase can be removed if we define the real spin direction as $\sigma_x$. So this is just a redundance of the notation.  
 \end{notebox}
 Define following two operators:
 \begin{equation}
     \begin{cases}
         \sigma_{\phi_s} = \sigma_+ e^{i\phi_s} + \sigma_- e^{-i\phi_s} \\
         A_{k, \phi_m}(t) = a_k e^{i(\delta t - \phi_m)} + a_k^\dagger e^{-i(\delta t - \phi_m)}
+    \end{cases}\qquad \qquad 
+    \begin{cases}
+        \sigma_{\phi_s} = \sigma_+ e^{i\phi_s} + \sigma_- e^{-i\phi_s} \\
+        A_{k, \phi_m}(t) = a_k e^{i\Phi_k(t)} + a_k^\dagger e^{-i\Phi_k(t)}
     \end{cases}
 \end{equation}
+Under the assumption that two laser have exactly the same detuning magnitude, $\phi_s$ will always be locked at the same value, thus the spin direction is fixed.  
 we can rewrite the Hamiltonian as:
 \begin{equation}
         H_k = \frac{\Omega}{2} \eta \cdot\sigma_{\phi_s}\otimes A_{k, \phi_m}(t) \tag{Effective Hamiltonian for bichromatic laser coupling}
@@ -706,14 +719,13 @@ The bounds on the control parameters and the standard deviations of the fluctuat
 % REVIEW: the experiment configs (experiments/spin_boson/configs/*.yaml) use alpha_1 in 2pi*[1, 60] kHz and alpha_2 in 2pi*[0, 200] kHz — the 600/20 below look like transposed zeros.
 % REVIEW: the configured value of sigma(xi_2) is 30 rad/s (approx 2pi * 4.8 Hz), not 2pi * 20 Hz.
 \begin{align*}
-    &\alpha_1\in 2\pi \cdot[1, 600] kHz \\
-    &\alpha_2\in 2\pi \cdot[0, 20] kHz \\
+    &\alpha_1\in 2\pi \cdot[1, 60] kHz \\
+    &\alpha_2\in 2\pi \cdot[0, 200] kHz \\
     &\alpha_2(0) = \alpha_2(T) = 0 \\
     &\sigma(\chi_1) = 0.0001,\quad \sigma(\chi_2) = 0.0001 \\
     &\sigma(\xi_1) = 2\pi \cdot 5Hz,\quad \sigma(\xi_2) = 2\pi \cdot 20Hz\\
     & T = 225.8 \mu s
 \end{align*}
-
 \subsection{Experiment 1: pulse searching}
 GRAPE is a local gradient method: from a given initial guess, L-BFGS-B converges to a stationary point inside the basin of attraction of that guess, so a single run samples exactly one basin of the control landscape. Experiment 1 therefore searches over basins. We prepared a gallery of ten named initial pulses --- sinusoidal $\alpha_2$ envelopes of different periods (\texttt{sine\_60}, \texttt{sine\_100}, \texttt{sine\_160}), multi-lobe envelopes (\texttt{two\_lobe}, \texttt{multilobe\_3}, \texttt{gaussian\_lobe}), a chirped ramp (\texttt{chirp\_ramp}), a constant high-$\alpha_1$ profile (\texttt{high\_alpha1\_const}), a flat-top profile (\texttt{flattop}) and a smoothed random profile (\texttt{random\_smooth}) --- and optimized each one independently under an identical configuration, one task per initial pulse (Slurm job array on USTC-SCC). Figure~\ref{fig:exp1-gallery} shows the gallery and the resulting optimized pulses.
 
