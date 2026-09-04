@@ -418,6 +418,11 @@ class SpinBosonParams:
         alpha1_noise_fraction: Standard deviation of the Gaussian noise added
             to the initial ``alpha1`` guess, as a fraction of the bounds
             half-width (random shape only).
+        alpha2_endpoint_zero: When true (default), the parameterization pins
+            ``alpha2`` to zero at the first and last time step
+            (``Alpha2EndpointZeroParameterization``); set false to allow
+            pulses with nonzero ``alpha2`` endpoints (e.g. a fully constant
+            baseline pulse).
     """
 
     n_levels: int = 6
@@ -431,6 +436,7 @@ class SpinBosonParams:
     alpha1_cycles: float = 1.0
     alpha1_offset_fraction: float = 0.7
     alpha1_noise_fraction: float = 0.3
+    alpha2_endpoint_zero: bool = True
 
 
 @dataclass(frozen=True)
@@ -498,7 +504,8 @@ class Alpha2EndpointZeroParameterization:
     The spin-motion drive must ramp up from zero and return to zero so the
     gate starts and ends with the qubits decoupled from the motion. Rather
     than trusting the optimizer to find this, the constraint is enforced
-    structurally: the first and last time steps of control column 1
+    structurally (``build_parameterization`` applies this wrapper unless
+    ``params.alpha2_endpoint_zero`` is false): the first and last time steps of control column 1
     (``alpha2``) are clamped to physical amplitude 0 in every representation
     the optimizer touches — physical amplitudes, normalized parameters,
     gradients, and bounds — so those two parameters are simply frozen.
@@ -754,14 +761,21 @@ class SpinBosonDefinition(SystemDefinitionBase):
         )
 
     def build_parameterization(self, params, pulse):
-        """Return the bounded parameterization with alpha2 endpoints frozen."""
-        return Alpha2EndpointZeroParameterization(
-            spin_boson_parameterization(
-                pulse.n_steps,
-                alpha1_khz_bounds=params.alpha1_khz_bounds,
-                alpha2_khz_bounds=params.alpha2_khz_bounds,
-            )
+        """Return the bounded parameterization, alpha2 endpoints frozen by default.
+
+        ``params.alpha2_endpoint_zero`` (default true) applies the
+        ``Alpha2EndpointZeroParameterization`` wrapper; when false the bare
+        bounded parameterization is returned, so pulses with nonzero
+        ``alpha2`` endpoints are representable.
+        """
+        base = spin_boson_parameterization(
+            pulse.n_steps,
+            alpha1_khz_bounds=params.alpha1_khz_bounds,
+            alpha2_khz_bounds=params.alpha2_khz_bounds,
         )
+        if not params.alpha2_endpoint_zero:
+            return base
+        return Alpha2EndpointZeroParameterization(base)
 
     def target_gate(self, params):
         return resolve_target_gate(params.target_gate)

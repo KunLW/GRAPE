@@ -115,7 +115,7 @@ assembles the `OpenSystem` (closed system + selected terms) with the YAML
   comes from `state_pairs`)
 - `build_initial_pulse` / `build_parameterization` — override for custom
   starts or structural constraints (see the alpha2 endpoint-zero wrapper in
-  `spin_boson.py`)
+  `spin_boson.py`, applied conditionally on `params.alpha2_endpoint_zero`)
 - `control_channels(params)` → `ControlChannel(label, display_scale,
   display_unit)` per channel (plot labels/units, CSV columns)
 - `population_structure(params)` → `PopulationStructure(dims, names, labels)`

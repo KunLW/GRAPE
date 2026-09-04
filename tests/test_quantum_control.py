@@ -29,6 +29,8 @@ from physical_systems.spin_boson import (
     DEFAULT_ALPHA1_KHZ_BOUNDS,
     DEFAULT_ALPHA2_KHZ_BOUNDS,
     DEFAULT_LAMB_DICKE_ETA,
+    SpinBosonDefinition,
+    SpinBosonParams,
     annihilation_operator,
     creation_operator,
     motion_resolved_gate_state_pairs,
@@ -841,6 +843,28 @@ def test_spin_boson_parameterization_uses_rad_s_bounds_and_round_trips():
     )
     assert np.allclose(reconstructed, pulse.amplitudes)
     assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 10
+
+
+def test_spin_boson_alpha2_endpoint_zero_flag_controls_parameterization():
+    definition = SpinBosonDefinition()
+    pulse = spin_boson_initial_pulse(n_steps=5)
+    flat = np.column_stack([np.full(5, 10_000.0), np.full(5, 20_000.0)])
+
+    constrained = definition.build_parameterization(SpinBosonParams(), pulse)
+    projected = constrained.to_physical(constrained.to_parameters(np.array(flat)))
+
+    assert np.allclose(projected[[0, -1], 1], 0.0)
+    assert np.allclose(projected[:, 0], flat[:, 0])
+    assert np.allclose(projected[1:-1], flat[1:-1])
+
+    unconstrained = definition.build_parameterization(
+        SpinBosonParams(alpha2_endpoint_zero=False), pulse
+    )
+    round_tripped = unconstrained.to_physical(
+        unconstrained.to_parameters(np.array(flat))
+    )
+
+    assert np.allclose(round_tripped, flat)
 
 
 def test_parameter_smooth_penalty_handles_constant_linear_and_curved_parameters():

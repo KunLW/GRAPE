@@ -12,10 +12,11 @@ With the repo Hamiltonian `H = alpha1 (I x n) + alpha2 * eta * S_phi x
 loop accumulates `Theta = 2*pi * (g / alpha1)^2`; `Theta = pi/2` requires
 `g = alpha1 / 2`, i.e. `alpha2 = alpha1 / eta`. (An `alpha2 = pi / (2*eta*T)`
 convention — 4x smaller — gives only `Theta = pi/32` here, closed fidelity
-~0.577.) The first/last `alpha2` steps are pinned to zero by the shared
-parameterization constraint; the remaining closed-gate infidelity
-(~1.6e-4) is dominated by that plus the `n_levels = 6` Fock truncation at
-peak displacement |alpha| ~ 1.
+~0.577.) The pulse is flat on every step: `config.yaml` sets
+`system.params.alpha2_endpoint_zero: false`, disabling the alpha2
+endpoint-zero parameterization constraint that shaped pulses use. The
+remaining closed-gate infidelity comes from the `n_levels = 6` Fock
+truncation at peak displacement |alpha| ~ 1.
 
 `config.yaml` copies the noise model of
 `robustness_eval/flattop_122us/config.yaml` (static sigmas 60 rad/s,

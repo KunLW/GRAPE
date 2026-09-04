@@ -14,9 +14,10 @@ Theta = 2*pi * (g / delta)^2 per S_phi eigenvalue squared; the maximally
 entangling MS gate XX(pi/2) = exp(i Theta S_phi^2) (up to global phase)
 needs Theta = pi/2, i.e. g = delta / 2, i.e. alpha2 = alpha1 / eta.
 
-The first and last alpha2 steps are set to zero because the shared
-parameterization (``Alpha2EndpointZeroParameterization``) freezes them there;
-without this the exported npz would be rejected by every evaluation tool.
+When the config sets ``system.params.alpha2_endpoint_zero: true``, the first
+and last alpha2 steps are zeroed to match the endpoint constraint the shared
+parameterization then enforces; with ``false`` (this folder's config) the
+pulse is flat on every step.
 
 Outputs (npz + csv in the exporter's standard format, plus a plot) land in
 ``--output-root`` (default: this folder's ``outputs/``). Run from the
@@ -66,14 +67,15 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def constant_ms_amplitudes(n_steps, total_time_s, eta):
-    """Flat alpha1/alpha2 columns with the alpha2 endpoints pinned to zero."""
+def constant_ms_amplitudes(n_steps, total_time_s, eta, alpha2_endpoint_zero):
+    """Flat alpha1/alpha2 columns; alpha2 endpoints zeroed only if required."""
     alpha1 = 2.0 * np.pi / total_time_s
     alpha2 = 2.0 * np.pi / (eta * total_time_s)
     amplitudes = np.column_stack(
         [np.full(n_steps, alpha1), np.full(n_steps, alpha2)]
     )
-    amplitudes[[0, -1], 1] = 0.0
+    if alpha2_endpoint_zero:
+        amplitudes[[0, -1], 1] = 0.0
     return amplitudes
 
 
@@ -106,7 +108,9 @@ def main():
     n_steps = config.pulse.n_steps
     total_time_s = config.pulse.total_time_us * 1e-6
     eta = config.system.params.eta
-    amplitudes = constant_ms_amplitudes(n_steps, total_time_s, eta)
+    amplitudes = constant_ms_amplitudes(
+        n_steps, total_time_s, eta, config.system.params.alpha2_endpoint_zero
+    )
     pulse = PiecewiseConstantPulse(amplitudes=amplitudes, dt=total_time_s / n_steps)
 
     args.output_root.mkdir(parents=True, exist_ok=True)
@@ -128,11 +132,16 @@ def main():
 
     alpha1_khz = amplitudes[0, 0] / RAD_S_PER_KHZ
     alpha2_khz = amplitudes[1, 1] / RAD_S_PER_KHZ
+    endpoint_note = (
+        "endpoints zeroed"
+        if config.system.params.alpha2_endpoint_zero
+        else "flat on all steps"
+    )
     print(
         f"n_steps={n_steps}, total_time_us={config.pulse.total_time_us:.6f}, "
         f"eta={eta}\n"
         f"alpha1={alpha1_khz:.6f} kHz (2*pi/T), "
-        f"alpha2={alpha2_khz:.6f} kHz (2*pi/(eta*T), endpoints zeroed)\n"
+        f"alpha2={alpha2_khz:.6f} kHz (2*pi/(eta*T), {endpoint_note})\n"
         f"closed_gate_fidelity={fidelity:.9f}\n"
         f"pulse_npz={npz_path}"
     )
