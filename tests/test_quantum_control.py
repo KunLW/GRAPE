@@ -43,6 +43,31 @@ from physical_systems.spin_boson import (
     two_qubit_spin_phase_difference,
     two_qubit_spin_phase_mode,
 )
+from physical_systems.two_ion_raman import (
+    CONTROL_LABELS,
+    DEFAULT_DETUNING_KHZ_BOUNDS,
+    DEFAULT_ETAS,
+    DEFAULT_MODE_SIGNS,
+    DEFAULT_RABI_KHZ_BOUNDS,
+    RABI_COLUMNS,
+    TwoIonRamanDefinition,
+    TwoIonRamanNoise,
+    TwoIonRamanParams,
+    collective_lowering_operator,
+    collective_sz,
+    mode_number_operator,
+    mode_operator,
+    motion_basis_state,
+    motion_indices,
+    motion_resolved_gate_state_pairs_4modes,
+    pair_coupling_operators,
+    single_ion_operator,
+    total_number_operator,
+    two_ion_raman_collapse_operators,
+    two_ion_raman_control_system,
+    two_ion_raman_initial_pulse,
+    two_ion_raman_parameterization,
+)
 from quantum_control import (
     ClosedSystem,
     SumProblem,
@@ -865,6 +890,406 @@ def test_spin_boson_alpha2_endpoint_zero_flag_controls_parameterization():
     )
 
     assert np.allclose(round_tripped, flat)
+
+
+def test_two_ion_raman_operators_embed_modes_with_identity_padding():
+    n_levels = 2
+    a = annihilation_operator(n_levels)
+    identity = np.eye(n_levels, dtype=complex)
+    sx = np.array([[0, 1], [1, 0]], dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    etas = (0.1, 0.2, 0.3, 0.4)
+    signs = (1.0, -1.0, 1.0, -1.0)
+
+    assert np.allclose(
+        mode_operator(a, 0, n_levels),
+        np.kron(np.kron(np.kron(a, identity), identity), identity),
+    )
+    assert np.allclose(
+        mode_operator(a, 3, n_levels),
+        np.kron(np.kron(np.kron(identity, identity), identity), a),
+    )
+    assert np.allclose(
+        total_number_operator(n_levels),
+        sum(mode_number_operator(k, n_levels) for k in range(4)),
+    )
+    assert np.allclose(
+        collective_lowering_operator(etas, signs, 0, n_levels),
+        sum(0.5 * etas[k] * mode_operator(a, k, n_levels) for k in range(4)),
+    )
+    assert np.allclose(
+        collective_lowering_operator(etas, signs, 1, n_levels),
+        sum(0.5 * signs[k] * etas[k] * mode_operator(a, k, n_levels) for k in range(4)),
+    )
+    assert np.allclose(single_ion_operator(sx, 0), np.kron(sx, np.eye(2)))
+    assert np.allclose(single_ion_operator(sx, 1), np.kron(np.eye(2), sx))
+    assert np.allclose(
+        collective_sz(),
+        0.5 * (np.kron(sz, np.eye(2)) + np.kron(np.eye(2), sz)),
+    )
+
+    indices = motion_indices(n_levels, 2)
+    assert len(indices) == 11
+    assert indices[0] == (0, 0, 0, 0)
+    assert all(sum(index_tuple) <= 2 for index_tuple in indices)
+    # Flat index of |n1 n2 n3 n4> is ((n1*n + n2)*n + n3)*n + n4.
+    state = motion_basis_state((1, 0, 1, 0), n_levels)
+    assert state.shape == (n_levels**4,)
+    assert np.count_nonzero(state) == 1
+    assert state[10] == 1.0
+
+    blue, red = pair_coupling_operators(0.3, etas, signs, 0, n_levels)
+    lowering = collective_lowering_operator(etas, signs, 0, n_levels)
+    sigma_plus = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=complex)
+    spin_raising = np.exp(0.3j) * single_ion_operator(sigma_plus, 0)
+    blue_half = np.kron(spin_raising, lowering.conj().T)
+    red_half = np.kron(spin_raising, lowering)
+    assert np.allclose(blue, blue_half + blue_half.conj().T)
+    assert np.allclose(red, red_half + red_half.conj().T)
+    assert np.allclose(blue, blue.conj().T)
+    assert np.allclose(red, red.conj().T)
+
+
+def test_two_ion_raman_control_system_builds_twelve_control_hamiltonians():
+    n_levels = 2
+    phi_s = 0.2
+    frequencies = (11000.0, 8000.0, 13000.0, 6000.0)
+    mu = 10000.0
+    detunings = (1000.0, -2000.0, 3000.0, -4000.0)  # frequencies - mu
+    starks = (500.0, -700.0)
+    stark_ratio = 0.001
+    system = two_ion_raman_control_system(
+        n_levels,
+        phi_s,
+        mode_frequencies_rad_s=frequencies,
+        mu_rad_s=mu,
+        stark_shifts_rad_s=starks,
+        stark_rabi_ratio=stark_ratio,
+    )
+    dimension = 4 * n_levels**4
+
+    assert system.drift.shape == (dimension, dimension)
+    assert len(system.controls) == 12
+    for control in system.controls:
+        control = np.asarray(control)
+        assert np.allclose(control, control.conj().T)
+
+    spin_identity = np.eye(4, dtype=complex)
+    motion_identity = np.eye(n_levels**4, dtype=complex)
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    n_total = np.kron(spin_identity, total_number_operator(n_levels))
+    z_ops = [
+        0.5 * np.kron(single_ion_operator(sz, ion), motion_identity) for ion in range(2)
+    ]
+    expected_drift = sum(
+        detunings[k] * np.kron(spin_identity, mode_number_operator(k, n_levels))
+        for k in range(4)
+    )
+    expected_drift = expected_drift + starks[0] * z_ops[0] + starks[1] * z_ops[1]
+    assert np.allclose(system.drift, expected_drift)
+
+    expected_controls = []
+    for ion in range(2):
+        blue, red = pair_coupling_operators(
+            phi_s, DEFAULT_ETAS, DEFAULT_MODE_SIGNS, ion, n_levels
+        )
+        stark = stark_ratio * z_ops[ion]
+        expected_controls += [
+            0.5 * (blue + red) + 2.0 * stark,
+            n_total,
+            0.5 * blue + stark,
+            -0.5 * (z_ops[ion] + n_total),
+            0.5 * red + stark,
+            0.5 * (z_ops[ion] - n_total),
+        ]
+    amplitudes = 0.1 * np.arange(1, 13)
+    expected = expected_drift + sum(
+        amplitude * hamiltonian
+        for amplitude, hamiltonian in zip(amplitudes, expected_controls)
+    )
+    assert np.allclose(system.nominal_hamiltonian(amplitudes), expected)
+    # Documented degeneracy: both ions' det_ref channels share the N generator.
+    assert np.allclose(system.controls[1], system.controls[7])
+
+    # Reduction check (at zero Stark ratio): equal rabi amplitudes, zero
+    # detunings give the spin_boson two_qubit_spin_phase_mode drive form per
+    # mode (factor 2).
+    zero_stark_system = two_ion_raman_control_system(
+        n_levels,
+        phi_s,
+        mode_frequencies_rad_s=frequencies,
+        mu_rad_s=mu,
+        stark_shifts_rad_s=starks,
+        stark_rabi_ratio=0.0,
+    )
+    w = 0.37
+    rabi_only = np.zeros(12)
+    rabi_only[list(RABI_COLUMNS)] = w
+    drive = zero_stark_system.nominal_hamiltonian(rabi_only) - zero_stark_system.drift
+    x1 = 0.5 * (annihilation_operator(n_levels) + creation_operator(n_levels))
+    expected_drive = 2.0 * w * sum(
+        DEFAULT_ETAS[k]
+        * np.kron(
+            two_qubit_spin_phase_mode(phi_s, (0.5, 0.5 * DEFAULT_MODE_SIGNS[k])),
+            mode_operator(x1, k, n_levels),
+        )
+        for k in range(4)
+    )
+    assert np.allclose(drive, expected_drive)
+
+
+def test_two_ion_raman_control_system_accepts_fluctuations():
+    n_levels = 2
+    dimension = 4 * n_levels**4
+    static_fluctuation = 0.01 * np.eye(dimension, dtype=complex)
+    control_fluctuations = [
+        0.01 * (index + 1) * np.kron(np.eye(4), mode_number_operator(index % 4, n_levels))
+        for index in range(12)
+    ]
+    controls = 0.1 * np.arange(1, 13)
+    system = two_ion_raman_control_system(
+        n_levels,
+        0.2,
+        static_fluctuations=[static_fluctuation],
+        control_fluctuations=control_fluctuations,
+    )
+
+    expected = static_fluctuation + sum(
+        amplitude * matrix for amplitude, matrix in zip(controls, control_fluctuations)
+    )
+
+    assert np.allclose(system.fluctuation_hamiltonian(controls), expected)
+    for index in range(12):
+        assert np.allclose(
+            system.fluctuation_control_derivative(index), control_fluctuations[index]
+        )
+
+
+def test_two_ion_raman_state_pairs_use_ordering_cutoff_and_weights():
+    n_levels = 2
+    pairs = motion_resolved_gate_state_pairs_4modes(ms_xx_pi_over_2_gate(), n_levels, 2)
+    first_pair = pairs[0]
+    dimension = 4 * n_levels**4
+
+    assert len(pairs) == 16 * 11
+    assert np.allclose(sum(pair.weight for pair in pairs), 11.0)
+    assert first_pair.initial_state.shape == (dimension,)
+    assert first_pair.target_state.shape == (dimension,)
+    assert np.allclose(first_pair.initial_state[0], 1.0)
+    assert np.allclose(first_pair.initial_state[1:], 0.0)
+    assert np.allclose(first_pair.weight, 1.0 / 16.0)
+
+    full = motion_resolved_gate_state_pairs_4modes(
+        ms_xx_pi_over_2_gate(), n_levels, 4 * (n_levels - 1)
+    )
+    assert len(full) == 16 * n_levels**4
+
+
+def test_two_ion_raman_initial_pulse_shapes_and_units():
+    pulse = two_ion_raman_initial_pulse(n_steps=50)
+    rabi_upper = DEFAULT_RABI_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0
+    detuning_lower = DEFAULT_DETUNING_KHZ_BOUNDS[0] * 2.0 * np.pi * 1000.0
+    detuning_upper = DEFAULT_DETUNING_KHZ_BOUNDS[1] * 2.0 * np.pi * 1000.0
+
+    assert pulse.amplitudes.shape == (50, 12)
+    assert np.allclose(pulse.dt, 225.8e-6 / 50)
+    reference_rabi = pulse.amplitudes[:, RABI_COLUMNS[0]]
+    for column in RABI_COLUMNS:
+        rabi = pulse.amplitudes[:, column]
+        assert np.allclose(rabi, reference_rabi)
+        assert np.all(rabi >= 0.0)
+        assert np.all(rabi <= 0.5 * rabi_upper + 1e-9)
+        assert rabi[25] > rabi[0]
+        assert rabi[25] > rabi[-1]
+    for column, label in enumerate(CONTROL_LABELS):
+        values = pulse.amplitudes[:, column]
+        if label.startswith("det_ref"):
+            assert np.all(values >= detuning_lower)
+            assert np.all(values <= detuning_upper)
+            assert np.allclose(values[0], values[-1])
+        elif column not in RABI_COLUMNS:
+            assert np.allclose(values, 0.0)
+
+
+def test_two_ion_raman_parameterization_round_trips_and_endpoint_flag():
+    pulse = two_ion_raman_initial_pulse(n_steps=5)
+    parameterization = two_ion_raman_parameterization(n_steps=5)
+    reconstructed = parameterization.to_physical(
+        parameterization.to_parameters(pulse.amplitudes)
+    )
+    rabi_bounds = tuple(b * 2.0 * np.pi * 1000.0 for b in DEFAULT_RABI_KHZ_BOUNDS)
+    detuning_bounds = tuple(b * 2.0 * np.pi * 1000.0 for b in DEFAULT_DETUNING_KHZ_BOUNDS)
+
+    assert np.allclose(reconstructed, pulse.amplitudes)
+    for index in range(12):
+        expected = (rabi_bounds, detuning_bounds)[index % 2]
+        assert np.allclose(parameterization.lower[index], expected[0])
+        assert np.allclose(parameterization.upper[index], expected[1])
+    assert parameterization.parameter_bounds(pulse.amplitudes.shape) == [(-1.0, 1.0)] * 60
+
+    definition = TwoIonRamanDefinition()
+    flat = np.full((5, 12), 12_345.0)
+    other_columns = [column for column in range(12) if column not in RABI_COLUMNS]
+
+    constrained = definition.build_parameterization(TwoIonRamanParams(), pulse)
+    projected = constrained.to_physical(constrained.to_parameters(np.array(flat)))
+    assert np.allclose(projected[[0, -1]][:, list(RABI_COLUMNS)], 0.0)
+    assert np.allclose(projected[1:-1], flat[1:-1])
+    assert np.allclose(projected[:, other_columns], flat[:, other_columns])
+    frozen = [
+        bounds
+        for bounds in constrained.parameter_bounds((5, 12))
+        if bounds[0] == bounds[1]
+    ]
+    assert len(frozen) == 12
+
+    unconstrained = definition.build_parameterization(
+        TwoIonRamanParams(rabi_endpoint_zero=False), pulse
+    )
+    round_tripped = unconstrained.to_physical(
+        unconstrained.to_parameters(np.array(flat))
+    )
+    assert np.allclose(round_tripped, flat)
+
+
+def test_two_ion_raman_grape_gradient_matches_finite_difference():
+    n_levels = 2
+    system = two_ion_raman_control_system(n_levels, 0.0)
+    dimension = 4 * n_levels**4
+    pulse = PiecewiseConstantPulse(
+        0.01 * np.arange(1, 37, dtype=float).reshape(3, 12),
+        dt=0.005,
+    )
+    context = EvolutionContext(
+        initial_state=np.eye(dimension, dtype=complex)[0],
+        target_state=np.eye(dimension, dtype=complex)[3 * n_levels**4 + 1],
+    )
+    step_builder = UnitaryStepBuilder()
+    evolution = NominalUnitaryEvolution(step_builder)
+    objective = StateTransferFidelity(context.target_state)
+    result = evolution.evolve(system, pulse, context)
+
+    analytic = GrapeDifferentiator(step_builder).gradient(system, pulse, context, result)
+    finite_difference = FiniteDifferenceDifferentiator(
+        evolution,
+        objective,
+        epsilon=1e-7,
+    ).gradient(system, pulse, context)
+
+    assert analytic.shape == pulse.amplitudes.shape
+    assert np.allclose(analytic, finite_difference, rtol=5e-2, atol=1e-8)
+
+
+def test_two_ion_raman_fluctuation_expansion_value_and_gradient_are_finite():
+    definition = TwoIonRamanDefinition()
+    params = TwoIonRamanParams(n_levels=2)
+    _closed, open_system = definition.build_systems(params, TwoIonRamanNoise())
+    dimension = 4 * params.n_levels**4
+
+    assert len(open_system.fluctuation_terms) == 14
+    assert len(open_system.control_fluctuations) == 12
+
+    pulse = PiecewiseConstantPulse(
+        0.02 * np.arange(1, 37, dtype=float).reshape(3, 12),
+        dt=0.05,
+    )
+    context = EvolutionContext(
+        initial_state=np.eye(dimension, dtype=complex)[0],
+        target_state=np.eye(dimension, dtype=complex)[3 * params.n_levels**4 + 1],
+    )
+    step_builder = PerturbativeStepBuilder()
+    objective = ExpansionFidelity(max_order=2)
+    problem = ControlProblem(
+        system=open_system,
+        pulse=pulse,
+        context=context,
+        evolution=PerturbativeExpansionEvolution(step_builder, max_order=2),
+        objective=objective,
+        differentiator=PerturbativeExpansionDifferentiator(step_builder, objective),
+    )
+
+    value = problem.value()
+    gradient = problem.gradient()
+
+    assert isinstance(value, float)
+    assert np.isfinite(value)
+    assert gradient.shape == (3, 12)
+    assert np.all(np.isfinite(gradient))
+
+
+def test_two_ion_raman_decoherence_channels_scale_and_filter():
+    definition = TwoIonRamanDefinition()
+    params = TwoIonRamanParams(n_levels=2)
+    noise = TwoIonRamanNoise()
+    decoherence = _dc_replace(
+        noise.decoherence,
+        enabled=True,
+        gamma_heating_mode2=4.0,
+        gamma_raman_ion1=2.0,
+    )
+    channels = definition.decoherence_channels(params, decoherence)
+    by_name = {channel.name: channel for channel in channels}
+    adag = creation_operator(params.n_levels)
+    sigma_plus = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=complex)
+    expected_heating = np.kron(np.eye(4), mode_operator(adag, 1, params.n_levels))
+
+    assert len(channels) == 15
+    assert by_name["heating-m2"].rate == 4.0
+    assert np.allclose(by_name["heating-m2"].operator, expected_heating)
+    assert np.allclose(by_name["heating-m2"].matrix, 2.0 * expected_heating)
+    assert by_name["raman-up-ion1"].rate == 1.0  # gamma / 2
+    assert np.allclose(
+        by_name["raman-up-ion1"].operator,
+        np.kron(single_ion_operator(sigma_plus, 0), np.eye(params.n_levels**4)),
+    )
+
+    gated = _dc_replace(
+        noise,
+        decoherence=decoherence,
+        fluctuations=_dc_replace(noise.fluctuations, enabled=False),
+    )
+    _closed, open_system = definition.build_systems(params, gated)
+    assert len(open_system.collapse_operators) == 3  # heating-m2 + raman up/down ion1
+
+    pulse = PiecewiseConstantPulse(np.full((2, 12), 0.02), dt=0.005)
+    pairs = definition.state_pairs(params)
+    collapse_operators = two_ion_raman_collapse_operators(
+        params.n_levels,
+        gamma_heating=(0.5, 0.4, 0.3, 0.2),
+        gamma_motional_dephasing=0.2,
+        gamma_spin_dephasing=0.1,
+        gamma_raman=(0.05, 0.05),
+        gamma_rayleigh=(0.02, 0.02),
+    )
+    closed = definition.build_closed_system(params)
+
+    without = noisy_gate_fidelity(closed, pulse, pairs)
+    with_decoherence = noisy_gate_fidelity(
+        closed, pulse, pairs, collapse_operators=collapse_operators
+    )
+    assert with_decoherence < without
+
+
+def test_two_ion_raman_probe_and_population_structure():
+    definition = TwoIonRamanDefinition()
+    params = TwoIonRamanParams(n_levels=2)
+    dimension = 4 * params.n_levels**4
+
+    probe = definition.probe_state_pair(params)
+    target = probe.target_state
+    assert target.shape == (dimension,)
+    assert np.allclose(target[0], 1.0 / np.sqrt(2.0))
+    assert np.allclose(target[3 * params.n_levels**4], -1j / np.sqrt(2.0))
+    remaining = np.ones(dimension, dtype=bool)
+    remaining[[0, 3 * params.n_levels**4]] = False
+    assert np.allclose(target[remaining], 0.0)
+    assert np.allclose(probe.initial_state[0], 1.0)
+
+    structure = definition.population_structure(params)
+    assert structure.dims == (4, params.n_levels**4)
+    assert len(structure.labels[1]) == params.n_levels**4
+    assert structure.labels[1][0] == "|0000>"
+    assert structure.labels[1][-1] == "|1111>"
 
 
 def test_parameter_smooth_penalty_handles_constant_linear_and_curved_parameters():
@@ -2128,6 +2553,116 @@ def test_experiment_writes_reloadable_config_snapshot(tmp_path):
     )
     snapshot = outcome["outputs"]["config_snapshot"]
     assert snapshot.exists()
+    reloaded = load_experiment_config(
+        snapshot, sbo.default_experiment_config(), get_system
+    )
+    assert reloaded == config
+
+
+def test_two_ion_raman_yaml_config_knobs_reach_system(tmp_path):
+    path = _yaml_config_file(
+        tmp_path,
+        "\n".join(
+            [
+                "system:",
+                "  type: two_ion_raman",
+                "  params:",
+                "    n_levels: 2",
+                "    mode_frequencies_khz: [3005.0, 2990.0, 3015.0, 2980.0]",
+                "    mu_khz: 3000.0",
+                "  noise:",
+                "    fluctuations:",
+                "      sigma_static_motional_frequency: 42.0",
+                "pulse:",
+                "  n_steps: 9",
+                "  random_seed: 7",
+                "",
+            ]
+        ),
+    )
+    config = sbo.parse_args(["--config", str(path)])
+    closed_system, open_system = sbo.build_systems(config)
+    by_name = {term.name: term for term in open_system.fluctuation_terms}
+
+    assert by_name["motion-shift"].coefficient == 42.0
+    assert by_name["rabi_ref1-rel"].coefficient == 1.0e-4
+    assert len(open_system.fluctuation_terms) == 14
+    assert len(open_system.control_fluctuations) == 12
+    # Drift element of |00>|1000> (flat index 8 at n_levels 2) is delta_1.
+    assert np.allclose(closed_system.drift[8, 8], 5.0 * 2.0 * np.pi * 1000.0)
+
+    pulse_a = sbo.build_initial_pulse(config)
+    pulse_b = sbo.build_initial_pulse(config)
+    np.testing.assert_allclose(pulse_a.amplitudes, pulse_b.amplitudes)
+    assert pulse_a.amplitudes.shape == (9, 12)
+
+
+def test_two_ion_raman_yaml_enabled_gating_registry_and_snapshot_round_trip(tmp_path):
+    definition = get_system("two_ion_raman")
+    assert isinstance(definition, TwoIonRamanDefinition)
+
+    params = _dc_replace(definition.default_params(), n_levels=2)
+    noise = definition.default_noise()
+    disabled = _dc_replace(
+        noise, fluctuations=_dc_replace(noise.fluctuations, enabled=False)
+    )
+    _closed, open_system = definition.build_systems(params, disabled)
+    assert open_system.noise_terms == ()
+
+    one_rate = _dc_replace(
+        disabled,
+        decoherence=_dc_replace(
+            disabled.decoherence, enabled=True, gamma_heating_mode3=50.0
+        ),
+    )
+    _closed, open_system = definition.build_systems(params, one_rate)
+    assert len(open_system.collapse_operators) == 1
+
+    zero_sigmas = _dc_replace(
+        noise,
+        fluctuations=_dc_replace(
+            noise.fluctuations,
+            enabled=True,
+            sigma_static_spin_dephasing=0.0,
+            sigma_static_motional_frequency=0.0,
+            sigma_control_rabi_relative=0.0,
+            sigma_control_detuning_relative=0.0,
+        ),
+    )
+    assert not zero_sigmas.fluctuations.any_sigma_positive
+    _closed, open_system = definition.build_systems(params, zero_sigmas)
+    assert open_system.noise_terms == ()
+
+    one_sigma = _dc_replace(
+        zero_sigmas,
+        fluctuations=_dc_replace(
+            zero_sigmas.fluctuations, sigma_control_rabi_relative=0.1
+        ),
+    )
+    _closed, open_system = definition.build_systems(params, one_sigma)
+    # Zero-sigma terms are kept: control-kind terms align with control
+    # channels positionally, so none may be dropped individually.
+    assert len(open_system.fluctuation_terms) == 14
+
+    config = load_experiment_config(
+        _yaml_config_file(tmp_path, "system:\n  type: two_ion_raman\n"),
+        sbo.default_experiment_config(),
+        get_system,
+    )
+    config = _dc_replace(
+        config,
+        system=_dc_replace(
+            config.system,
+            params=_dc_replace(
+                config.system.params,
+                n_levels=2,
+                etas=(0.1, 0.2, 0.3, 0.4),
+                stark_shifts_khz=(1.5, -2.5),
+            ),
+        ),
+        pulse=_dc_replace(config.pulse, n_steps=7, random_seed=3),
+    )
+    snapshot = write_config_snapshot(config, tmp_path / "snap.yaml")
     reloaded = load_experiment_config(
         snapshot, sbo.default_experiment_config(), get_system
     )

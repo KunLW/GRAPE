@@ -1,0 +1,56 @@
+\documentclass{simple-notes}
+\usepackage{physics}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{multirow}
+\usepackage[backend=bibtex, style=authoryear]{biblatex}
+\addbibresource{Optimal_Pulse_Control.bib}
+\title{GRAPE for Ion Trap System}
+\author{Kun-Long Wu}
+\newcommand{\closef}{\mathbf{F}}
+\newcommand{\openf}{\mathcal{F}}
+\newcommand{\dvbar}[1]{\overline{#1}}
+\begin{document}
+\section{Ion-train Raman System}
+In this section, we will discuss an ion-train system with transverse Raman beams. Ion trapped in a linear Paul trap. Three transverse Laser beams are applied to the ion that willing to drive the Raman transition. Red and blue sideband transitions are driven by the Raman beams. Multi-motional modes are considered simutaneously. The cutoff of motional modes is set to be $8$, which gives an error of $10^{-5}$ in the simulation. Since classical computer can not handle the large Hilbert space, the limit of the number of mode could be considered simutaneously is $\approx 9$(equivalent to $29$ qubits). For ion train longer than $9$ ions, we only consider nearest $9$ modes. 
+
+\begin{notebox}[title=System Receipt]
+\begin{itemize}
+    \item close system:
+\begin{equation}
+    H_k = \mu_k^{asym}\sigma_z - \mu_k^{sym} a^\dagger_k a_k + \Omega^{sym} \sigma_{\phi}\otimes X_k -\Omega^{asym}\sigma_{\phi+\pi/2}\otimes P_k + \delta_{ac} \sigma_z
+\end{equation}
+    \item control channels:
+    \begin{center}
+        \begin{tabular}{|ll|l|}
+            \textbf{Parameter} && \textbf{Range / relation} \\
+            \hline
+            BSB effactive Rabi &$\Omega^{b}$ & \multirow{4}{*}{$[0,400]\,\mathrm{kHz}$} \\
+            RSB effactive Rabi &$\Omega^{r}$ & \\
+            BSB two photon detuning &$\omega^{b}$ & \\
+            RSB two photon detuning &$\omega^{r}$ & \\
+            \hline
+            light 1 Rabi &$g_1$ & $[0,1]\,\mathrm{GHz}$\\
+            \hline
+            laser 1 D1 detuning &$\Delta$ & $[1,60] \,\mathrm{THz}$\\ 
+            \hline
+            light shift &$\delta_{ac}$ & $\delta_{ac}(g_1,\Delta)$
+            \hline
+        \end{tabular}
+    \end{center}
+    $\Delta$ is one-photon detuning of the Raman transition. 
+    \item noise: 
+    \begin{enumerate}
+        \item excited states spontaneous emission back to the ground states
+        \item excited states spontaneous emission leakage to other states 
+        \item motional mode heating $\dot{\bar{n}}_k = 1$phonon/s
+        \item control parameter fluctuation
+    \end{enumerate}
+    noise that is not considered:
+    \begin{enumerate}
+        \item 
+        \item $\cdots$
+    \end{enumerate}
+    \end{itemize}
+\end{notebox}
+\end{document}

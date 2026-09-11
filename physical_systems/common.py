@@ -161,6 +161,10 @@ class SystemDefinitionBase:
 
     # ---- physics hooks (subclass responsibilities) -------------------------
 
+    def default_params(self):
+        """The frozen params dataclass whose fields are the YAML schema."""
+        raise NotImplementedError
+
     def build_closed_system(self, params):
         """The noiseless system: nominal + control Hamiltonians only."""
         raise NotImplementedError

@@ -1,0 +1,44 @@
+# Example experiment configuration for the minimal sample system.
+#
+# Run with:
+#   python -m experiments.driver.run_experiment --config experiments/single_qubit/configs/example.yaml
+#
+# Every system.params value equals the built-in default, so this file doubles
+# as the schema reference. single_qubit is closed-only, so there is no
+# system.noise section — the defaults keep both noise types disabled.
+
+system:
+  type: single_qubit            # registry key; see physical_systems/single_qubit.py
+  params:
+    detuning_khz: 1.0           # constant drive detuning delta (kHz)
+    rabi_khz_bounds: [0.0, 200.0]  # Rabi control bounds (kHz)
+
+pulse:
+  n_steps: 30
+  total_time_us: 100.0
+  random_seed: 12345
+
+objective:
+  max_order: 2
+  drop_odd_average: true
+  normalize_weights: false
+
+optimizer:
+  method: L-BFGS-B
+  maxiter: 20
+  gtol: 1.0e-12
+  ftol: 1.0e-15
+  maximize: true
+
+penalty:
+  l1_smooth_weight: 5.0e-4
+  l2_smooth_weight: 1.0e-4
+
+runtime:
+  workers: 1
+  print_step: true
+  print_fidelity_terms: false
+  no_progress: false
+
+output:
+  prefix: single-qubit            # run dir = <prefix>_<timestamp>; unset -> system name

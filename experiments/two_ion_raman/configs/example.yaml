@@ -1,0 +1,80 @@
+# Example experiment configuration for experiments/driver/run_experiment.py.
+#
+# Run with:
+#   python -m experiments.driver.run_experiment --config experiments/two_ion_raman/configs/example.yaml
+#
+# Every system.params / system.noise value below equals the built-in default
+# except where a comment says otherwise, so this file doubles as the schema
+# reference. Absent keys keep their defaults; unknown keys raise an error.
+# The global sections (pulse/optimizer/runtime) are deliberately small so the
+# example runs in seconds; see the field docstrings in
+# physical_systems/two_ion_raman.py for production-scale guidance.
+
+system:
+  type: two_ion_raman           # registry key; see physical_systems/
+  params:
+    n_levels: 8                 # per-mode Fock truncation; dim = 4 * n^4 (default 3 -> 324, kept at 2 here for speed)
+    phi_s: 0.0                  # fixed spin phase of both Raman pairs (rad)
+    modes_khz: [1.0, 2.0, 3.0, 4.0]  
+    modes_strength: [(0.5, -0.5),(0.5, 0.5)]                       
+    etas: [0.075, 0.076, 0.053, 0.054]       # per-mode Lamb-Dicke couplings of the nominal Delta k
+           # ion-2 participation sign per mode (+1 COM, -1 rocking)   
+    target_gate: ms_xx_pi_over_2  # registry name (shared spin_boson TARGET_GATES)
+    motion_target_phonon_cutoff: 2  # total-phonon target resolution; 4*(n_levels-1) = exact full basis
+    rabi_khz_bounds: [0.0, 400.0]       # all six rabi channels (effective pair-Rabi kHz)
+    detuning_khz_bounds: [-60.0, 60.0]  # all six detuning channels (kHz)
+    
+    initial_pulse_shape: random # "random" or "cosine"
+    detuning_cycles: 1.0        # cosine shape: det_ref cycles across the pulse
+    detuning_offset_fraction: 0.7  # random shape: det_ref = center + offset*scale + noise*scale*randn
+    detuning_noise_fraction: 0.3
+    rabi_endpoint_zero: true    # pin the six rabi columns to zero at the first/last step
+  noise:
+    decoherence:                # first-order Lindblad correction channels (rates in 1/s)
+      enabled: false
+      gamma_heating_mode1: 0.0        # L = sqrt(gamma) I_spin (x) adag_k, one rate per mode
+      gamma_heating_mode2: 0.0
+      gamma_heating_mode3: 0.0
+      gamma_heating_mode4: 0.0
+      gamma_motional_dephasing: 0.0   # I_spin (x) n_k, one common rate for all four modes
+      gamma_spin_dephasing: 0.0       # (sz (x) I + I (x) sz)/2
+      gamma_raman_ion1: 0.0           # spontaneous Raman spin flips, sigma± at gamma/2 each
+      gamma_raman_ion2: 0.0
+      gamma_rayleigh_ion1: 0.0        # Rayleigh dephasing, sigma_z^(j)/2
+      gamma_rayleigh_ion2: 0.0
+    fluctuations:               # long-correlation classical noise expansion
+      enabled: true
+      sigma_static_spin_dephasing: 314.159      # rad/s, collective sz
+      sigma_static_motional_frequency: 300.0    # rad/s, common mu-drift on sum_k n_k
+      sigma_control_rabi_relative: 1.0e-4       # relative amplitude noise per rabi channel
+      sigma_control_detuning_relative: 1.0e-4   # ... per detuning channel
+
+pulse:
+  n_steps: 40                   # small example; production runs use hundreds of steps
+  total_time_us: 225.8
+  random_seed: 12345            # reproducible initial pulse noise
+
+objective:
+  max_order: 2
+  drop_odd_average: true
+  normalize_weights: false
+
+optimizer:
+  method: L-BFGS-B
+  maxiter: 3                    # smoke-test depth; raise for real optimizations
+  gtol: 1.0e-12
+  ftol: 1.0e-15
+  maximize: true
+
+penalty:
+  l1_smooth_weight: 5.0e-4
+  l2_smooth_weight: 1.0e-4
+
+runtime:
+  workers: 2
+  print_step: false
+  print_fidelity_terms: false
+  no_progress: false
+
+output:
+  prefix: two-ion-raman           # run dir = <prefix>_<timestamp>; unset -> system name

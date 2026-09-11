@@ -42,17 +42,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from quantum_control import RAD_S_PER_KHZ, khz_bounds_to_rad_s
-from quantum_control.pulses.parameterization import BoundedAmplitudeParameterization
-from quantum_control.pulses.pulse import PiecewiseConstantPulse
-from quantum_control.problems.state_average import StatePair
-from quantum_control.systems import (
-    ClosedSystem,
-    DecoherenceChannel,
-    FluctuationTerm,
-    OpenSystem,
-)
-
 from physical_systems.common import (
     ControlChannel,
     DecoherenceConfigBase,
@@ -62,6 +51,16 @@ from physical_systems.common import (
     SystemDefinitionBase,
     basis_state,
     validate_pulse_config,
+)
+from quantum_control import RAD_S_PER_KHZ, khz_bounds_to_rad_s
+from quantum_control.problems.state_average import StatePair
+from quantum_control.pulses.parameterization import BoundedAmplitudeParameterization
+from quantum_control.pulses.pulse import PiecewiseConstantPulse
+from quantum_control.systems import (
+    ClosedSystem,
+    DecoherenceChannel,
+    FluctuationTerm,
+    OpenSystem,
 )
 
 DEFAULT_LAMB_DICKE_ETA = 0.075
