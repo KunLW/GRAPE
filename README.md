@@ -15,15 +15,29 @@ The implemented perturbative path returns expansion components such as
 be added without changing objective or optimizer code.
 
 This perturbative path implements the long-time-correlation fluctuation limit
-from `doc/report_opengrape_iontrap.tex`. Static fluctuation matrices represent
+from `doc/report.tex`. Static fluctuation matrices represent
 `sigma_xi H_xi`; control fluctuation matrices represent `sigma_chi_i H_chi_i`;
-the fluctuation Hamiltonian is
-`sum static_fluctuations + sum control_i * control_fluctuation_i`. The
+each is an independent zero-mean quasi-static source. The expansion keeps
+one insertion chain per source and sums its second-order fidelity correction:
+`F_closed + sum_a (abs(A1_a)**2 + 2*real(conj(A0)*A2_a))`.
+The scaled operators must not be summed before this quadratic contraction.
+Nominal propagation is shared across channels. Multi-source averages support
+`max_order <= 2` with `drop_odd_average=True`; higher-order mixed moments and
+correlated-source covariance are not implemented. The
 short-time-correlation decoherence limit is handled by the Lindblad path:
 `LindbladExpansionEvolution` + `LindbladCorrectedStateFidelity` add a
 first-order decoherence correction inside the optimization loop, and
 `faithful_gate_fidelity` (exact density-matrix propagation with Gauss-Hermite
 averaging over the fluctuations) provides the evaluation-time cross-check.
+
+For multiple sources, `PerturbativeStep.V` has shape `(n_noise, d, d)` and
+expansion components at orders 1/2 have shape `(n_noise, d)`; order 0 remains
+`(d,)`. Zero/one-source and Lindblad states retain their vector shapes. See
+`doc/fluctuation_gradient.md` for the channel-aware gradient and logging rules.
+The within-step second-order insertion remains omitted, so time-step convergence
+is still required. Historical reports generated before the independent-channel
+fix retain their original values; replaying their configs with the corrected
+engine changes the noise model used by the perturbative objective.
 
 ## Quick Example
 

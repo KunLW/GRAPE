@@ -1,0 +1,1 @@
+This code including calculate ion's position, axial and radial frequency spectrum, fit the trapping potential according to the frequency measured in experiment.

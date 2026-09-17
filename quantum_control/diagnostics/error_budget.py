@@ -294,8 +294,13 @@ def _v_insertion_rows(system, pulse, pairs, config):
         t = step_index * pulse.dt
         leading = leading_builder.build_step(system, controls, pulse.dt, t=t).V
         frechet = frechet_builder.build_step(system, controls, pulse.dt, t=t).V
-        fro_errors.append(_relative_matrix_error(leading, frechet, ord=None))
-        spectral_errors.append(_relative_matrix_error(leading, frechet, ord=2))
+        # Compare each independent insertion, without merging its operator
+        # with other sources (which can cancel and hide insertion errors).
+        leading_channels = leading if leading.ndim == 3 else (leading,)
+        frechet_channels = frechet if frechet.ndim == 3 else (frechet,)
+        for leading_channel, frechet_channel in zip(leading_channels, frechet_channels):
+            fro_errors.append(_relative_matrix_error(leading_channel, frechet_channel, ord=None))
+            spectral_errors.append(_relative_matrix_error(leading_channel, frechet_channel, ord=2))
 
     leading_value = _perturbative_value(system, pulse, pairs, leading_builder, config)
     frechet_value = _perturbative_value(system, pulse, pairs, frechet_builder, config)

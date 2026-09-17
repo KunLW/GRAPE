@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from quantum_control.differentiators.base import Differentiator
+from quantum_control.evolution.expansion_evolution import apply_operator
 
 
 class PerturbativeExpansionDifferentiator(Differentiator):
@@ -54,9 +55,9 @@ class PerturbativeExpansionDifferentiator(Differentiator):
     def _local_component_derivatives(derivative_step, previous_forward, max_order):
         derivatives = {}
         for order in range(max_order + 1):
-            value = derivative_step.W @ previous_forward[order]
+            value = apply_operator(derivative_step.W, previous_forward[order])
             if order > 0:
-                value = value + derivative_step.V @ previous_forward[order - 1]
+                value = value + apply_operator(derivative_step.V, previous_forward[order - 1])
             derivatives[order] = value
         return derivatives
 
@@ -67,8 +68,8 @@ class PerturbativeExpansionDifferentiator(Differentiator):
             amplitude = 0.0 + 0.0j
             for local_order in range(final_order + 1):
                 future_order = final_order - local_order
-                amplitude = amplitude + np.vdot(
-                    next_backward[future_order],
+                amplitude = amplitude + np.einsum(
+                    "...i,...i->...", np.conj(next_backward[future_order]),
                     local_derivatives[local_order],
                 )
             derivative_amplitudes[final_order] = amplitude

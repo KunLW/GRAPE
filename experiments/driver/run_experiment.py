@@ -851,6 +851,7 @@ def write_optimization_preview_report(
                 ("n_steps", config.pulse.n_steps),
                 ("total_time_us", initial_pulse.n_steps * initial_pulse.dt * 1e6),
                 ("include_fluctuations", config.system.noise.fluctuations.enabled),
+                ("fluctuation_average", "independent channels (second moments)"),
                 *control_bounds_rows(parameterization, initial_pulse, channels),
                 ("max_order", config.objective.max_order),
                 ("state_pair_count", len(state_pairs)),
@@ -1025,13 +1026,14 @@ def calculate_kappa_metrics(system, open_system, pulse, parameterization, collap
     ).reshape(len(channel_bounds), -1).T
     nominal_norms = []
     fluctuation_norms = []
-    has_fluctuations = bool(open_system.static_fluctuations or open_system.control_fluctuations)
     for controls in boundary_controls:
         nominal_norms.append(float(np.linalg.norm(system.nominal_hamiltonian(controls), ord=2)))
+        source_matrices = list(open_system.static_fluctuations) + [
+            amplitude * matrix
+            for amplitude, matrix in zip(controls, open_system.control_fluctuations)
+        ]
         fluctuation_norms.append(
-            float(np.linalg.norm(open_system.fluctuation_hamiltonian(controls), ord=2))
-            if has_fluctuations
-            else 0.0
+            float(np.sqrt(sum(np.linalg.norm(matrix, ord=2)**2 for matrix in source_matrices)))
         )
     nominal_norms = np.asarray(nominal_norms, dtype=float)
     fluctuation_norms = np.asarray(fluctuation_norms, dtype=float)
@@ -1071,7 +1073,7 @@ def validity_rows(metrics):
         (
             "kappa_2",
             metrics["kappa_2"],
-            "T * max_alpha ||H_fluctuation||_2 over bounds (expansion small parameter)",
+            "T * max_alpha sqrt(sum_a ||G_a(alpha)||_2^2) (independent-channel strength estimate)",
         ),
     ]
     if metrics.get("kappa_3_lindblad_norm", 0.0) > 0.0:
@@ -1206,9 +1208,12 @@ def perturbative_fidelity_terms(system, pulse, state_pairs, max_order=2, drop_od
         a2 = amplitudes.get(2, 0.0 + 0.0j)
         weight = float(pair.weight)
         closed_term = weight * float(np.abs(a0) ** 2)
-        first_order_sq = weight * float(np.abs(a1) ** 2)
-        second_order_cross = weight * float(2.0 * np.real(np.conj(a0) * a2))
-        dropped_order1_cross = weight * float(2.0 * np.real(np.conj(a0) * a1))
+        first_order_sq = weight * float(np.sum(np.abs(a1) ** 2))
+        second_order_cross = weight * float(2.0 * np.real(np.conj(a0) * np.sum(a2)))
+        dropped_order1_cross = weight * float(2.0 * np.real(np.conj(a0) * np.sum(a1)))
+        # Legacy amplitude columns hold channel sums for display only.
+        # In particular first_order_sq is NOT the square of the displayed a1.
+        a1, a2 = np.sum(a1), np.sum(a2)
         pair_rows.append(
             {
                 "pair_index": pair_index,
@@ -1222,7 +1227,7 @@ def perturbative_fidelity_terms(system, pulse, state_pairs, max_order=2, drop_od
                 "closed_term": closed_term,
                 "first_order_sq": first_order_sq,
                 "second_order_cross": second_order_cross,
-                "perturbative_open": closed_term + first_order_sq + second_order_cross,
+                "perturbative_open": weight * float(np.real(objective.contract(amplitudes))),
                 "dropped_order1_cross": dropped_order1_cross,
             }
         )
@@ -1230,7 +1235,7 @@ def perturbative_fidelity_terms(system, pulse, state_pairs, max_order=2, drop_od
     closed_term = float(sum(row["closed_term"] for row in pair_rows))
     first_order_sq = float(sum(row["first_order_sq"] for row in pair_rows))
     second_order_cross = float(sum(row["second_order_cross"] for row in pair_rows))
-    perturbative_open = closed_term + first_order_sq + second_order_cross
+    perturbative_open = float(sum(row["perturbative_open"] for row in pair_rows))
     pair_open_values = [row["perturbative_open"] for row in pair_rows]
     summary = {
         "closed_term": closed_term,

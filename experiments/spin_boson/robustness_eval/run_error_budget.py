@@ -177,7 +177,7 @@ def parse_args(argv=None):
 def noise_sources(open_system):
     """(label, single-term OpenSystem) per noise term of the nominal system."""
     sources = []
-    for term in open_system.noise_terms:
+    for source_index, term in enumerate(open_system.noise_terms):
         if isinstance(term, FluctuationTerm):
             kind = f"fluctuation-{term.kind}"
             strength = term.coefficient
@@ -193,7 +193,13 @@ def noise_sources(open_system):
                 "kind": kind,
                 "strength": float(strength),
                 "scaled_spectral_norm": float(np.linalg.norm(term.matrix, ord=2)),
-                "system": replace(open_system, noise_terms=(term,)),
+                # Zero placeholders retain the positional mapping of control
+                # fluctuations. Removing earlier controls remaps alpha2 to alpha1.
+                "system": replace(open_system, noise_terms=tuple(
+                    item if index == source_index else replace(item, coefficient=0.0)
+                    for index, item in enumerate(open_system.noise_terms)
+                    if index == source_index or isinstance(item, FluctuationTerm)
+                )),
             }
         )
     return sources

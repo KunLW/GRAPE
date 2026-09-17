@@ -7,6 +7,13 @@ from quantum_control.results.expansion_result import ExpansionResult, ExpansionS
 
 
 class PerturbativeExpansionEvolution(Evolution):
+    """Propagate independent quasi-static channels through second order.
+
+    Higher-order states carry a leading noise-channel axis when there are
+    multiple sources. Order two contains only same-channel double insertions;
+    mixed insertions average to zero. Nominal propagation is shared.
+    """
+
     def __init__(self, step_builder, max_order=2):
         if max_order < 0:
             raise ValueError("max_order must be non-negative.")
@@ -23,6 +30,8 @@ class PerturbativeExpansionEvolution(Evolution):
             )
             for step_index in range(pulse.n_steps)
         ]
+        if steps and steps[0].V.ndim == 3 and self.max_order > 2:
+            raise ValueError("Independent multi-channel expansion supports max_order <= 2.")
         forward = self._forward_states(steps, context.initial_state)
         backward = None
         if context.compute_backward and context.target_state is not None:
@@ -32,13 +41,17 @@ class PerturbativeExpansionEvolution(Evolution):
             forward=forward,
             backward=backward,
             max_order=self.max_order,
-            metadata={"dt": pulse.dt},
+            metadata={
+                "dt": pulse.dt,
+                "target_state": context.target_state,
+                "fluctuation_average": "independent_second_order",
+            },
         )
 
     def _forward_states(self, steps, initial_state, seed_components=None):
         states = [ExpansionState({0: np.asarray(initial_state, dtype=complex)})]
         for order in range(1, self.max_order + 1):
-            states[0].components[order] = np.zeros_like(states[0].components[0])
+            states[0].components[order] = _zero_component(steps, initial_state)
         if seed_components:
             for order, state in seed_components.items():
                 states[0].components[order] = np.asarray(state, dtype=complex)
@@ -47,9 +60,9 @@ class PerturbativeExpansionEvolution(Evolution):
             previous = states[-1].components
             components = {}
             for order in range(self.max_order + 1):
-                propagated = step.W @ previous[order]
+                propagated = apply_operator(step.W, previous[order])
                 if order > 0:
-                    propagated = propagated + step.V @ previous[order - 1]
+                    propagated = propagated + apply_operator(step.V, previous[order - 1])
                 components[order] = propagated
             states.append(ExpansionState(components))
         return states
@@ -58,7 +71,7 @@ class PerturbativeExpansionEvolution(Evolution):
         states_by_index = [None] * (len(steps) + 1)
         final_components = {0: np.asarray(target_state, dtype=complex)}
         for order in range(1, self.max_order + 1):
-            final_components[order] = np.zeros_like(final_components[0])
+            final_components[order] = _zero_component(steps, target_state)
         states_by_index[-1] = ExpansionState(final_components)
 
         for step_index in range(len(steps) - 1, -1, -1):
@@ -66,9 +79,23 @@ class PerturbativeExpansionEvolution(Evolution):
             next_components = states_by_index[step_index + 1].components
             components = {}
             for order in range(self.max_order + 1):
-                propagated = step.W.conj().T @ next_components[order]
+                propagated = apply_operator(step.W.conj().T, next_components[order])
                 if order > 0:
-                    propagated = propagated + step.V.conj().T @ next_components[order - 1]
+                    propagated = propagated + apply_operator(
+                        step.V.conj().swapaxes(-1, -2), next_components[order - 1]
+                    )
                 components[order] = propagated
             states_by_index[step_index] = ExpansionState(components)
         return states_by_index
+
+
+def apply_operator(operator, state):
+    """Matrix-vector product, preserving an optional independent-channel axis."""
+    return np.einsum("...ij,...j->...i", operator, state)
+
+
+def _zero_component(steps, state):
+    shape = np.shape(state)
+    if steps and steps[0].V.ndim == 3:
+        shape = (steps[0].V.shape[0],) + shape
+    return np.zeros(shape, dtype=complex)

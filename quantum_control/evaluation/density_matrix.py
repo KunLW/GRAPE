@@ -92,17 +92,20 @@ def faithful_gate_fidelity(system, pulse, state_pairs, hermite_points=5):
     """
     state_pairs = tuple(state_pairs)
     fluctuation_terms = tuple(getattr(system, "fluctuation_terms", ()))
+    active_indices = tuple(
+        index for index, term in enumerate(fluctuation_terms) if np.any(term.matrix)
+    )
     collapse_operators = tuple(getattr(system, "collapse_operators", ()))
     dimension = np.asarray(system.drift).shape[0]
     dissipator = _dissipator_superoperator(collapse_operators, dimension)
 
     # Gauss-Hermite nodes/weights for each independent standard normal:
     # integral N(0,1) f = sum_k (w_k / sqrt(pi)) f(sqrt(2) x_k).
-    if fluctuation_terms:
+    if active_indices:
         nodes, weights = hermgauss(int(hermite_points))
         nodes = np.sqrt(2.0) * nodes
         weights = weights / np.sqrt(np.pi)
-        grid = itertools.product(range(len(nodes)), repeat=len(fluctuation_terms))
+        grid = itertools.product(range(len(nodes)), repeat=len(active_indices))
     else:
         nodes, weights = np.zeros(1), np.ones(1)
         grid = [()]
@@ -115,7 +118,10 @@ def faithful_gate_fidelity(system, pulse, state_pairs, hermite_points=5):
 
     fidelity = 0.0
     for index_combo in grid:
-        xi = np.array([nodes[k] for k in index_combo], dtype=float)
+        # Keep the original control positions while integrating only nonzero
+        # sources; zero placeholders must not add quadrature dimensions.
+        xi = np.zeros(len(fluctuation_terms), dtype=float)
+        xi[list(active_indices)] = [nodes[k] for k in index_combo]
         node_weight = float(np.prod([weights[k] for k in index_combo])) if index_combo else 1.0
         total = _node_superpropagator(system, pulse, xi, fluctuation_terms, dissipator)
         final_vecs = total @ initial_vecs

@@ -32,7 +32,7 @@ system:
       sigma_control_alpha2_relative: 0.0001
 pulse:
   n_steps: 400
-  total_time_us: 76.89881521585632
+  total_time_us: 150
   random_seed: null
 objective:
   max_order: 2
@@ -40,7 +40,7 @@ objective:
   normalize_weights: false
 optimizer:
   method: L-BFGS-B
-  maxiter: 1
+  maxiter: 100
   gtol: 1.0e-12
   ftol: 1.0e-15
   maximize: true
@@ -52,8 +52,7 @@ runtime:
   print_step: true
   print_fidelity_terms: false
   save_fidelity_terms: null
-  initial_pulse_npz: experiments/spin_boson/close_grape/spin_boson_close_20260715_140822/pulse/latest_pulse_s400.npz
+  # initial_pulse_npz: experiments/spin_boson/open_grape/initial_pulse_s400.npz
   no_progress: false
 output:
-  output_root: experiments/spin_boson/close_grape
-  prefix: spin_boson_close
+

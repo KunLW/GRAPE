@@ -31,11 +31,19 @@ class ExpansionFidelity(Objective):
             raise ValueError("Expansion fidelity requires a target state or backward states.")
         final_components = result.forward[-1].components
         return {
-            order: np.vdot(target_state, final_components[order])
+            order: np.einsum("i,...i->...", np.conj(target_state), final_components[order])
             for order in range(min(self.max_order, result.max_order) + 1)
         }
 
     def contract(self, amplitudes, derivative_amplitudes=None):
+        # A_0 is scalar; A_1 and A_2 are channel vectors for independent noise.
+        # Sum |A_1,a|^2 and A_0* A_2,a, never |sum_a A_1,a|^2.
+        if any(np.ndim(value) > 0 for value in amplitudes.values()):
+            if self.max_order > 2 or not self.drop_odd_average:
+                raise ValueError(
+                    "Independent multi-channel fidelity requires max_order <= 2 "
+                    "and drop_odd_average=True."
+                )
         value = 0.0 + 0.0j
         orders = range(self.max_order + 1)
         for left_order in orders:
@@ -48,11 +56,11 @@ class ExpansionFidelity(Objective):
                 left = amplitudes.get(left_order, 0.0)
                 right = amplitudes.get(right_order, 0.0)
                 if derivative_amplitudes is None:
-                    value = value + np.conj(left) * right
+                    value = value + np.sum(np.conj(left) * right)
                 else:
                     dleft = derivative_amplitudes.get(left_order, 0.0)
                     dright = derivative_amplitudes.get(right_order, 0.0)
-                    value = value + np.conj(dleft) * right + np.conj(left) * dright
+                    value = value + np.sum(np.conj(dleft) * right + np.conj(left) * dright)
         return value
 
 

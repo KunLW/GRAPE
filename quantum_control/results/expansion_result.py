@@ -7,6 +7,11 @@ import numpy as np
 
 @dataclass(frozen=True)
 class ExpansionState:
+    """Order zero is (d,); independent multi-noise orders 1/2 are (n_noise, d).
+
+    A zero/one-source expansion and the Lindblad path keep vectors at all
+    orders. Multi-source order two stores same-channel insertions only.
+    """
     components: dict[int, np.ndarray]
 
     def component(self, order):

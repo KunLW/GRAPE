@@ -37,9 +37,16 @@ where $\xi$ and $\chi$ are zero-mean random variables that describe the fluctuat
 Two limiting cases of the time correlation of the fluctuation are considered. The first is the limit of infinitely long time correlation, i.e., $\xi$ is a random variable that stays constant throughout the gate operation. The second is the limit of infinitely short time correlation, i.e., $\xi$ is a random variable that is independent at different times.
 The correlation functions for each are
 \begin{align}
-    \text{long time correlation (fluctuation): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \\
+    \text{independent quasi-static channels: } &\expval{\xi_a(t)\xi_b(t')} = \delta_{ab}\sigma_a^2 \\
     \text{short time correlation (decoherence): } &\expval{\xi_j(t)\xi_j(t')} = \sigma^2 \delta(t - t')
 \end{align}
+For quasi-static fluctuations, independence is between noise channels, whereas
+each channel remains constant throughout one gate. We assume that the static
+variables $\xi_m$ and the relative control variables $\chi_i$ are mutually
+independent and zero mean. Their standard deviations specify the diagonal
+second moments; they must not replace the random variables before taking
+products and averaging. More generally one needs the cross-channel covariance
+$C_{ab}=\expval{z_a z_b}$ for standardized variables $z_a$; here $C_{ab}=\delta_{ab}$.
 Long time correlation is treated as the fluctuation of the system, while short time correlation is treated as the Markovian noise of the system, which can be described by the Lindblad master equation.
 Thus the evolution of the system can be described by the following equation:
 \begin{equation}
@@ -61,7 +68,7 @@ where the set of $q$ spans the logical subspace. For a two-qubit gate, the logic
 \begin{lemma}[Recursive Calculation of the Gradient of Perturbative Expectation]
     For an expectation value of the form
     \begin{equation}
-        \mathcal{F}^{(l)} = \sum_{\abs{\alpha}=l} \Gamma^{(n)}_{\alpha}\mel{\psi}{U_N\cdots V_{\alpha_1} \cdots V_{\alpha_l} \cdots U_1}{\phi}
+        \mathcal{F}^{(l)} = \sum_{N\geq\alpha_1>\cdots>\alpha_l\geq1}\mel{\psi}{U_N\cdots V_{\alpha_1} \cdots V_{\alpha_l} \cdots U_1}{\phi}
     \end{equation}
     then the derivative of $\mathcal{F}$ w.r.t. one time step $c_i(k)$ can be calculated recursively by defining the following states:
     \begin{align*}
@@ -75,7 +82,11 @@ where the set of $q$ spans the logical subspace. For a two-qubit gate, the logic
         \dvbar{\mathcal{F}^{(l)}} &= \sum_{m+n=l}\braket{B_k^{(m)}}{\dvbar{F_k^{(n)}}},
     \end{align*}
 \end{lemma}
-Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different responses to certain types of noise.
+This recursion generates unweighted insertion sums for a single source.
+Independent quasi-static sources are handled by separate channel-indexed
+chains and a final second-moment contraction, as derived below. An arbitrary
+correlation tensor $\Gamma^{(n)}_\alpha$ cannot be incorporated by the displayed
+recursion alone; it requires additional state or a suitable factorization.
 \begin{example}
     Here we give three examples, the first one is the Markovian noise, the second one is the quasi-static noise, and the third one is non-Markovian noise. 
     \begin{enumerate}
@@ -92,7 +103,8 @@ Theoretically, we can design the tensor $\Gamma^{(n)}_\alpha$ to give different 
     \end{align*}
     \item Fluctuation with perturbation condition: $T\norm{H_{\text{fluc}}} < 1$.
     \begin{align*}
-        V_k = -i\tau H_{\text{fluc}}(t_k)U_k, \qquad \Gamma^{(2)}_{\alpha_1,\alpha_2} = \mathcal{K}(\alpha_1 - \alpha_2) = \text{const.} 
+        V_{k,a} = -i\tau\sigma_a H_a(t_k)U_k, \qquad
+        \expval{z_a(t_k)z_b(t_l)} = \delta_{ab}.
     \end{align*}
     \end{enumerate}
     %TODO: make the example more precise and correct them, then add the non-Markovian example with Discriminator noise.
@@ -116,37 +128,63 @@ Focusing on $\mathcal{E}_\xi$, we can write it as the following form:
 \end{align}
 
 where $\delta U_j = -i\tau\vb*\xi\cdot \vb H_{\xi}U_j$ is the first order perturbation of the propagator $U_j$ due to the fluctuation.
-We notice that the expectation of the first order term is zero, thus the leading order of the fluctuation effect is the second order term, i.e., $\expval{\mathcal{E}_\xi - \mathcal{E}} \approx \sum_{i,j=-N, i,j\neq 0}^N \expval{U_N \cdots \delta U_i \cdots \delta U_j \cdots U_1 \rho_0 U_{-1} \cdots U_{-N}}$. This can be evaluated by the correlation function of the noise. For fluctuation with long time correlation, we have $\expval{\xi_j(t)\xi_j(t')} = \sigma^2$, thus it becomes a function of standard deviation $\sigma$ of the fluctuation.
+The first-order expectation vanishes. At second order, distinguish time-slice
+indices $k,l$ from noise-channel indices $a,b$. Write every random coefficient
+as $\sigma_a z_a$, with $\expval{z_a}=0$ and $\expval{z_a z_b}=\delta_{ab}$.
+The channel label includes both static and control fluctuations; for a control
+fluctuation, $H_a(t_k)$ includes the factor $c_i(k)$.
 
 Define $W$ as the propagator without fluctuation terms.
 \begin{equation}
     W_j = \exp\left\{-i\tau \left(H_0(t_j) + \sum_{i} c_i(t_j) H_i \right)\right\} + O(\tau \abs{H})
 \end{equation}
-Define $V$ as  the first order perturbation of the propagator $U_j$ due to the fluctuation
+Define one scaled first-order insertion for each noise channel:
+\begin{align}
+V_{k,a} &= -i\tau\sigma_a H_a(t_k)W_k,
+&\delta U_k &\approx \sum_a z_a V_{k,a}.
+\end{align}
+For any intervening nominal propagation $M$, independence gives
 \begin{equation}
-V_j = -i\tau(\sum_i\sigma_{\xi_i} H_{\xi_i}+ \sum_i\sigma_{\chi_i} c_i(j) H_{\chi_i}) W_j
-\end{equation} 
-we can get the following expansion of the open gate fidelity to first non-vanishing order of the fluctuation, i.e., the second order of $V$:
+\expval{\delta U_k M\delta U_l}
+=\sum_{a,b}\expval{z_a z_b}V_{k,a}MV_{l,b}
+=\sum_a V_{k,a}MV_{l,a}.
+\end{equation}
+The same channel selection applies when one insertion is adjointed on the
+other side of the density matrix. Replacing both insertions by
+$V_k=\sum_a V_{k,a}$ would retain the $a\ne b$ cross terms and describe
+perfectly correlated sources $\xi_a=\sigma_a z$, rather than independent ones.
+The second-order open fidelity in the single-insertion-per-slice approximation is
 \begin{equation}
-    \openf \approx \closef + \sum_{i,j=-N}^N \bra{\psi} W_{N} \cdots V_{i} \cdots W_1 W_0 W_{-1} \cdots V_j \cdots W_{-N} \ket{\psi}\qquad (i>j,\, i,j\neq 0)
+    \openf \approx \closef + \sum_a\sum_{\substack{N\geq i>j\geq-N\\i,j\neq0}} \mel{\psi}{\mathcal I_{ij}^{(a)}}{\psi}
     \label{eq:fluc_expansion_a}
 \end{equation}
-where $W_0 = \ketbra{\psi_0}$, $W_{-1} = W_{1}^\dagger$. Notice that the perturbation expansion is valid (converge) only when $\kappa_2 = \sigma\norm{H_{\text{fluc}}} T < 1$. A good approximation for the first order approximation further requires $(\sigma\norm{H_{\text{fluc}}} T)^2 \ll 1$.
+Here $\mathcal I_{ij}^{(a)}$ is the ordered product
+$W_N\cdots W_0\cdots W_{-N}$ with $W_i$ replaced by $V_{i,a}$ and
+$W_j$ replaced by $V_{j,a}$, without changing their positions.
+We use $W_0 = \ketbra{\psi_0}$, $W_{-k}=W_k^\dagger$, and
+$V_{-k,a}=V_{k,a}^\dagger$. The closed term is counted once.
+This approximation additionally neglects second-order insertions within the
+same single-step propagator. It is therefore not a step-size-exact second-order
+Taylor expansion. However, since we have small time slice relative to the noise correlation time, the approximation is reasonable. 
 
 To calculate the derivative of the open gate fidelity, we first define the following six groups of states, for $k = 1, 2,\ldots, N$:
 \begin{itemize}
     \item $\ket{F_k} = W_k\cdots W_1\ket{\psi_0}$ for the forward propagation of the initial state with no fluctuation
-    \item $\ket{SF_k} = \sum_{i=1}^k W_k\cdots W_{i+1}V_i W_{i-1} \cdots W_1\ket{\psi_0}$ for the forward propagation with a single fluctuation. $\ket{SF_k} = 0$ if $k = 0, 1$
-    \item $\ket{DF_k} = \sum_{i,j}W_k\cdots V_i \cdots V_j \cdots W_1\ket{\psi_0}$ for the forward propagation with double fluctuation
-    \item $\bra{B_k} = \bra{\psi} W_N \cdots W_{k+1}$ for the backward propagation of the final state with no fluctuation
-    \item $\bra{SB_k} = \sum_{j}\bra{\psi} W_N \cdots V_j \cdots W_{k+1}$ for the backward propagation with a single fluctuation
-    \item $\bra{DB_k} = \sum_{i,j}\bra{\psi} W_N \cdots V_i \cdots V_j \cdots W_{k+1}$ for the backward propagation with double fluctuation
+    \item $\ket{SF_{k,a}} = \sum_{i=1}^k W_k\cdots W_{i+1}V_{i,a} W_{i-1} \cdots W_1\ket{\psi_0}$ for one insertion from channel $a$. Only $\ket{SF_{0,a}}=0$; generally $\ket{SF_{1,a}}=V_{1,a}\ket{\psi_0}$.
+    \item $\ket{DF_{k,a}} = \sum_{k\geq i>j\geq1}W_k\cdots V_{i,a} \cdots V_{j,a} \cdots W_1\ket{\psi_0}$ for two insertions from the same channel; $DF_{0,a}=DF_{1,a}=0$.
+    \item $\ket{B_k}=W_{k+1}^\dagger\cdots W_N^\dagger\ket{\psi}$ for nominal backward propagation.
+    \item $\ket{SB_{k,a}}$ for the adjoint backward chain with one insertion from channel $a$.
+    \item $\ket{DB_{k,a}}$ for the adjoint backward chain with two insertions from the same channel.
 \end{itemize}
-The open fidelity can then be decomposed by placing two indistinguishable $V$ operators in the four possible positions:
-\begin{itemize}
-    \item $\ket{SF_k} = W_k\ket{SF_{k-1}} + V_k \ket{F_{k-1}}$
-    \item $\ket{DF_k} = W_k\ket{DF_{k-1}} + V_k \ket{SF_{k-1}}$
-\end{itemize}
+For each channel, the two insertions must carry the same label. The recursions are
+\begin{align*}
+SF_{k,a} &= W_k SF_{k-1,a}+V_{k,a}F_{k-1},\\
+DF_{k,a} &= W_k DF_{k-1,a}+V_{k,a}SF_{k-1,a},\\
+SB_{k,a} &= W_{k+1}^\dagger SB_{k+1,a}+V_{k+1,a}^\dagger B_{k+1},\\
+DB_{k,a} &= W_{k+1}^\dagger DB_{k+1,a}+V_{k+1,a}^\dagger SB_{k+1,a}.
+\end{align*}
+The backward boundary conditions are $B_N=\ket{\psi}$ and
+$SB_{N,a}=DB_{N,a}=0$. Nominal states $F_k,B_k$ are shared across channels.
 \begin{figure}[h]
     \centering
 
@@ -219,58 +257,63 @@ The open fidelity can then be decomposed by placing two indistinguishable $V$ op
     \end{tikzpicture}
 \caption{The fluctuation summation can be decomposed as follows: the propagation chain is partitioned by $U_k$, $\rho_0$, and $U_k^\dagger$, which defines four possible insertion regions for each fluctuation operator. The two indistinguishable $V$ operators may be placed either in the same region or in different regions. In each region, the contribution can be double fluctuation ($DF$ or $DB$), single fluctuation ($SF$ or $SB$), or no fluctuation ($F$ or $B$). It is also worth to note that at second order, each chain contains exactly two fluctuation operators. }
 \end{figure}
-In total there are 11 different terms.
+The diagram is for one fixed channel $a$, with its label suppressed. There are
+11 second-order terms per channel; sum them over $a$ and add the closed term once.
 
 
 \begin{align*}
-    F = B^\dagger FF^\dagger B\\
-    \mathcal{F} = F + &DB^\dagger\, F\, F^\dagger\, B + h.c.\\
-    + &SB^\dagger\, SF\, F^\dagger\, B + h.c.\\
-    + &SB^\dagger\, F\, SF^\dagger\, B + h.c.\\
-    + &SB^\dagger\, F\, F^\dagger\, SB \\
-    + &B^\dagger\, DF\, F^\dagger\, B + h.c.\\
-    + &B^\dagger\, SF\, SF^\dagger\, B
+    \closef = B^\dagger FF^\dagger B\\
+    \mathcal{F} = \closef + \sum_a\Big[&DB_a^\dagger\, F\, F^\dagger\, B + h.c.\\
+    + &SB_a^\dagger\, SF_a\, F^\dagger\, B + h.c.\\
+    + &SB_a^\dagger\, F\, SF_a^\dagger\, B + h.c.\\
+    + &SB_a^\dagger\, F\, F^\dagger\, SB_a \\
+    + &B^\dagger\, DF_a\, F^\dagger\, B + h.c.\\
+    + &B^\dagger\, SF_a\, SF_a^\dagger\, B\Big].
 \end{align*}
-% REVIEW: the "{c}" after \dvbar{F} looks like a stray token (\dvbar takes a single argument), rendering as $\overline{F}c$. Did you mean $\overline{\mathcal{F}} = \pdv{\mathcal{F}}{\vb c}$?
-\begin{align*}
-    \mathcal{\overline{F}} = \dvbar{F}{c} = 2\mathbf{Re}\{B^\dagger \dvbar{F}F^\dagger B + DB^\dagger \dvbar{F}F^\dagger B + B\dvbar{F}F^\dagger DB + \cdots\}
-\end{align*}
+At the final time, define $A_0=\braket{\psi}{F_N}$,
+$A_{1,a}=\braket{\psi}{SF_{N,a}}$, and $A_{2,a}=\braket{\psi}{DF_{N,a}}$.
+The same expression simplifies to
+\begin{align}
+\mathcal F &\approx |A_0|^2+\sum_a\left[|A_{1,a}|^2+
+2\operatorname{Re}(A_0^* A_{2,a})\right],\\
+\partial_c\mathcal F &=2\operatorname{Re}\left\{
+A_0^*\partial_c A_0+\sum_a\left[
+A_{1,a}^*\partial_c A_{1,a}+(\partial_c A_0)^*A_{2,a}
++A_0^*\partial_c A_{2,a}\right]\right\}.
+\end{align}
+Here $\partial_c$ denotes differentiation with respect to one control coordinate.
+In particular, $\sum_a|A_{1,a}|^2$ must not be replaced by
+$|\sum_a A_{1,a}|^2$. Weighted state-pair averaging is applied afterwards and
+does not perform the noise average.
 Introduce the notation
 \begin{equation}
     \dvbar{F_k} = \pdv{\ket{F_k}}{\vb c(k)}
 \end{equation}
-Now the derivative can be calculated by $\dvbar{F}$, $\dvbar{SF}$, $\dvbar{DF}$.
+Now differentiate the local recursions separately for each noise channel.
 
 \begin{align*}
-    \dvbar{F_k} &= \pdv{W_k}{\vb c(k)} W_{k-1} \cdots W_1 \ket{\psi_0} = -i\tau H_c \ket{F_k} = \dvbar{W_k}\ket{F_{k-1}}\\
-    \dvbar{SF_k} &= \sum_{i=1}^{k-1} \pdv{W_k}{\vb c(k)} W_{k-1} \cdots W_{i+1}V_i W_{i-1} \cdots W_1\ket{\psi_0} + \pdv{V_k}{\vb c(k)}W_{k-1} \cdots W_1\ket{\psi_0} \\
-    &= \dvbar{W_k}\ket{SF_{k-1}} + \dvbar{V_k}\ket{F_{k-1}} \\
-    % REVIEW: the factor "W_k" right after \pdv{W_k}{\vb c(k)} looks like it should be W_{k-1} (cf. the \dvbar{SF_k} line above), so the chain reads \pdv{W_k}{}\,W_{k-1}\cdots.
-    \dvbar{DF_k} &= \sum_{i,j}^{k-1} \pdv{W_k}{\vb c(k)} W_k \cdots V_i \cdots V_j \cdots W_1\ket{\psi_0} + \sum_{i}\pdv{V_k}{\vb c(k)}W_{k-1}\cdots V_{i}\cdots W_1\ket{\psi_0} \\
-    &= \dvbar{W_k}\ket{DF_{k-1}} + \dvbar{V_k}\ket{SF_{k-1}}
+    \dvbar{F_k} &= \dvbar{W_k}\ket{F_{k-1}} \approx -i\tau H_c\ket{F_k},\\
+    \dvbar{SF_{k,a}} &= \dvbar{W_k}\ket{SF_{k-1,a}} + \dvbar{V_{k,a}}\ket{F_{k-1}},\\
+    \dvbar{DF_{k,a}} &= \dvbar{W_k}\ket{DF_{k-1,a}} + \dvbar{V_{k,a}}\ket{SF_{k-1,a}}.
 \end{align*}
 
 The derivatives of the propagators $W$ and $V$ can be calculated from the Fr\'echet derivative of the matrix exponential. With the condition $\kappa_1\ll 1$, we can use the Dyson expansion and keep only the first order term.
 \begin{align}
-    \pdv{W_k}{c_i(j)}
+    \pdv{W_k}{c_i(k)}
     &=
     -i\tau H_i W_k
     + O\!\left((\tau\norm{H})^2\right),
     \\
-    \pdv{V_k}{c_i(k)}
-    &=
-    -i\tau \sigma_{\chi_i} H_{\chi_i}W_k
-    + (-i\tau)^2
-    \left(
-        \sigma_{\xi}H_{\xi}
-        + \sigma_{\chi}c(j)H_{\chi}
-    \right)
-    H_i W_k + O\!\left((\tau\norm{H})^3\right) ,
-    \notag\\
-    &=
-    -i\tau \sigma_{\chi_i}H_{\chi_i}W_k
-    + O\!\left((\tau\norm{H})^2\right) .
+    \pdv{V_{k,a}}{c_i(k)}
+    &= -i\tau\sigma_a\left[
+    \pdv{H_a(t_k)}{c_i(k)}W_k+
+    H_a(t_k)\pdv{W_k}{c_i(k)}\right].
 \end{align}
+The last identity differentiates the leading-insertion definition exactly.
+For a static source the explicit derivative of $H_a$ is zero. For a relative
+control source belonging to control $j$, it is $\delta_{ij}H_{\chi_j}$.
+The derivative through $W_k$ contributes to every channel. Backward contraction
+uses the same channel label on both sides before summing channel contributions.
 
 \[\sigma_k=\sqrt{\sum_j \|H_{\mathrm{static},j}\|_2^2+\sum_a\left(
 c_{k,a}\|H_{\mathrm{control\_fluc},a}\|_2
@@ -591,6 +634,9 @@ use the relation
     e^{i\theta A} = \cos\theta + i \sin\theta A \quad \text{if $A^2 = 1$, i.e., $A = \vb* \sigma \cdot \hat{n}$}
 \end{equation}
 we can get the following operator transformation:
+\begin{align}
+    \ket{a}\bra{b} \to e^{i(\omega_a - \omega_b) t} \ket{a}\bra{b}\quad \text{for bosonic operators}
+\end{align}
 \begin{align*}
     \begin{split}
     a_k &\to  e^{-i \omega_k t} a_k \\
@@ -727,6 +773,13 @@ The bounds on the control parameters and the standard deviations of the fluctuat
     & T = 225.8 \mu s
 \end{align*}
 \subsection{Experiment 1: pulse searching}
+\paragraph{Historical results.}
+The numerical tables and plots below were generated before the independent-channel
+averaging correction of 2026-09-14. They are retained as historical results of
+the earlier aggregate-insertion objective, not recomputed results of the corrected
+derivation above. Claims about independent-noise robustness require reevaluation
+with the corrected engine and the original pulse/configuration snapshots.
+
 GRAPE is a local gradient method: from a given initial guess, L-BFGS-B converges to a stationary point inside the basin of attraction of that guess, so a single run samples exactly one basin of the control landscape. Experiment 1 therefore searches over basins. We prepared a gallery of ten named initial pulses --- sinusoidal $\alpha_2$ envelopes of different periods (\texttt{sine\_60}, \texttt{sine\_100}, \texttt{sine\_160}), multi-lobe envelopes (\texttt{two\_lobe}, \texttt{multilobe\_3}, \texttt{gaussian\_lobe}), a chirped ramp (\texttt{chirp\_ramp}), a constant high-$\alpha_1$ profile (\texttt{high\_alpha1\_const}), a flat-top profile (\texttt{flattop}) and a smoothed random profile (\texttt{random\_smooth}) --- and optimized each one independently under an identical configuration, one task per initial pulse (Slurm job array on USTC-SCC). Figure~\ref{fig:exp1-gallery} shows the gallery and the resulting optimized pulses.
 
 All runs share $T = 225.8\,\mu s$, $N = 400$ steps, and at most $400$ L-BFGS-B iterations with smoothness penalties $\lambda_{L1} = 5\times 10^{-4}$, $\lambda_{L2} = 10^{-4}$. The gate fidelity is averaged over $96$ weighted state pairs: the $16$ logical two-qubit states $\{\ket 0, \ket 1, \ket +, \ket{+i}\}^{\otimes 2}$, with each target resolved over the $6$ motional levels. This experiment used a \emph{strong}-fluctuation scenario, ten times the static deviations of the Configuration above: $\sigma(\xi_1) = 2\pi\cdot 50\,\mathrm{Hz} = 314.16\,\mathrm{rad/s}$, $\sigma(\xi_2) = 300\,\mathrm{rad/s}$, $\sigma(\chi_1)=\sigma(\chi_2)=10^{-4}$.
