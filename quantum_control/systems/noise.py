@@ -48,7 +48,9 @@ class FluctuationTerm(NoiseTerm):
     the instantaneous control amplitude at propagation time, which makes the
     coefficient a *relative* error; control terms align with control
     channels positionally). ``coefficient`` is the standard deviation sigma;
-    ``usage`` is a human-readable string carried into the report.
+    ``usage`` is a human-readable string carried into the report. Distinct
+    terms are independent zero-mean sources, including terms whose operators
+    happen to coincide or have opposite signs.
     """
 
     coefficient: float

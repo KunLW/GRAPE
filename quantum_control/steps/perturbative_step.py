@@ -10,6 +10,13 @@ from quantum_control.steps.unitary_step import UnitaryStepBuilder
 
 @dataclass(frozen=True)
 class PerturbativeStep:
+    """One nominal step and noise insertions.
+
+    ``V`` is (d, d) for zero/one fluctuation channel, or (n_noise, d, d)
+    for multiple independent channels. Its channel axis must not be summed
+    before the second-order fidelity contraction.
+    """
+
     W: np.ndarray
     V: np.ndarray
 
@@ -43,11 +50,16 @@ class PerturbativeStepBuilder(UnitaryStepBuilder):
             V = -1j * dt * fluctuation_h @ unitary_step.W
         elif self.V_method == "frechet":
             hamiltonian = system.nominal_hamiltonian(controls, t=t)
-            V = expm_frechet(
-                -1j * dt * hamiltonian,
-                -1j * dt * fluctuation_h,
-                compute_expm=False,
-            )
+
+            def insertion(matrix):
+                return expm_frechet(
+                    -1j * dt * hamiltonian, -1j * dt * matrix, compute_expm=False
+                )
+
+            if fluctuation_h.ndim == 3:
+                V = np.stack([insertion(matrix) for matrix in fluctuation_h])
+            else:
+                V = insertion(fluctuation_h)
         else:
             raise ValueError("V_method must be 'leading' or 'frechet'.")
         return PerturbativeStep(
@@ -94,7 +106,19 @@ class PerturbativeStepBuilder(UnitaryStepBuilder):
 
 
 def _fluctuation_hamiltonian(system, controls, like, t=None):
-    """H_fluctuation, or zero for systems without a noise model (ClosedSystem)."""
+    """Independent scaled insertions; legacy aggregate-only systems are one source.
+
+    Keep zero control entries: their positions identify which physical control
+    multiplies each noise operator. Static channels precede control channels.
+    """
+    if hasattr(system, "static_fluctuations") or hasattr(system, "control_fluctuations"):
+        matrices = list(getattr(system, "static_fluctuations", ()))
+        matrices.extend(
+            amplitude * matrix
+            for amplitude, matrix in zip(controls, getattr(system, "control_fluctuations", ()))
+        )
+        if matrices:
+            return _channel_matrices(matrices, like)
     method = getattr(system, "fluctuation_hamiltonian", None)
     if method is None:
         return np.zeros_like(like)
@@ -103,7 +127,24 @@ def _fluctuation_hamiltonian(system, controls, like, t=None):
 
 def _fluctuation_control_derivative(system, control_index, like, controls=None, t=None):
     """dH_fluctuation/d(control), or zero for systems without a noise model."""
+    if hasattr(system, "static_fluctuations") or hasattr(system, "control_fluctuations"):
+        zero = np.zeros_like(like)
+        matrices = [zero for _ in getattr(system, "static_fluctuations", ())]
+        matrices.extend(
+            matrix if index == control_index else zero
+            for index, matrix in enumerate(getattr(system, "control_fluctuations", ()))
+        )
+        if matrices:
+            return _channel_matrices(matrices, like)
     method = getattr(system, "fluctuation_control_derivative", None)
     if method is None:
         return np.zeros_like(like)
     return method(control_index, controls=controls, t=t)
+
+
+def _channel_matrices(matrices, like):
+    if not matrices:
+        return np.zeros_like(like)
+    if len(matrices) == 1:
+        return np.asarray(matrices[0], dtype=complex)
+    return np.stack(matrices)

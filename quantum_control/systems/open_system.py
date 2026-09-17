@@ -57,6 +57,11 @@ class OpenSystem(ClosedSystem):
         return tuple(channel.matrix for channel in self.decoherence_channels)
 
     def fluctuation_hamiltonian(self, controls, t=None):
+        """Sum of scaled operators, for diagnostics or a unit noise draw.
+
+        This sum is not a noise average. Perturbative propagation keeps the
+        static/control sources separate and contracts their second moments.
+        """
         hamiltonian = np.zeros_like(self.drift, dtype=complex)
         for fluctuation_h in self.static_fluctuations:
             hamiltonian = hamiltonian + fluctuation_h

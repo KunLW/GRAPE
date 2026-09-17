@@ -1,561 +1,202 @@
-# Fluctuation Gradient 算法说明
+# Fluctuation Gradient：独立噪声的二阶平均与梯度
 
-本文说明当前代码中 fluctuation gradient 的核心思路：把带 fluctuation 的传播写成按 fluctuation 插入次数展开的状态；对每个控制参数 \(c_{k,a}\)，只计算它所在时间片 \(k\) 的局部导数；最后用已经缓存好的 forward/backward expansion 做 contraction，得到 fidelity objective 的梯度。
+本文对应 `max_order=2, drop_odd_average=True` 的准静态独立噪声模型。
+每个通道分别具有给定的标准差，同一通道在一次门操作期间保持不变。
+**先保留通道索引做展开，再按二阶矩收缩；不能先合并噪声算符再平方。**
 
-相关代码主要在：
+## 1. 统计假设与单步插入
 
-- [`quantum_control/steps/perturbative_step.py`](../quantum_control/steps/perturbative_step.py)
-- [`quantum_control/evolution/expansion_evolution.py`](../quantum_control/evolution/expansion_evolution.py)
-- [`quantum_control/differentiators/expansion_differentiator.py`](../quantum_control/differentiators/expansion_differentiator.py)
-- [`quantum_control/objectives/expansion_fidelity.py`](../quantum_control/objectives/expansion_fidelity.py)
+把静态和控制噪声统一记作
 
-## 1. 单步传播子
-
-第 \(k\) 个时间片的名义传播子是：
-
-$$
-W_k = \exp\left(-i\,\Delta t\,H_{\mathrm{nominal}}(c_k)\right)
-$$
-
-一阶 fluctuation 插入项写成：
-
-$$
-V_k = -i\,\Delta t\,H_{\mathrm{fluc}}(c_k)\,W_k
-$$
-
-其中 fluctuation Hamiltonian 是：
-
-$$
-H_{\mathrm{fluc}}(c_k)
-= \sum_j H^{(j)}_{\mathrm{static\_fluc}}
-+ \sum_a c_{k,a} H^{(a)}_{\mathrm{control\_fluc}}
-$$
-
-也就是说，\(V_k\) 表示在第 \(k\) 步中插入一次 fluctuation。它不是一个独立传播子，而是 fluctuation Hamiltonian 乘在名义传播子 \(W_k\) 前面。
-
-对应代码在 [`perturbative_step.py`](../quantum_control/steps/perturbative_step.py)：
-
-```python
-def build_step(self, system, controls, dt, t=None):
-    unitary_step = super().build_step(system, controls, dt, t=t)
-    fluctuation_h = system.fluctuation_hamiltonian(controls, t=t)
-    return PerturbativeStep(
-        W=unitary_step.W,
-        V=-1j * dt * fluctuation_h @ unitary_step.W,
-    )
-```
-
-对控制参数 \(c_{k,a}\) 求导时，名义传播子的导数默认采用一阶近似：
-
-$$
-\frac{\partial W_k}{\partial c_{k,a}}
-\approx
--i\,\Delta t\,H_a\,W_k
-$$
-
-fluctuation 插入项的导数是：
-
-$$
-\frac{\partial V_k}{\partial c_{k,a}}
-=
--i\,\Delta t\,
-\frac{\partial H_{\mathrm{fluc}}}{\partial c_{k,a}}\,W_k
--i\,\Delta t\,
-H_{\mathrm{fluc}}(c_k)\,
-\frac{\partial W_k}{\partial c_{k,a}}
-$$
-
-对应代码在 [`perturbative_step.py`](../quantum_control/steps/perturbative_step.py)：
-
-```python
-def derivative_step(self, system, controls, dt, control_index, step, t=None):
-    dW = super().derivative_step(system, controls, dt, control_index, step, t=t).W
-    dfluc_h = system.fluctuation_control_derivative(
-        control_index,
-        controls=controls,
-        t=t,
-    )
-    dV = -1j * dt * dfluc_h @ step.W
-    if self.dV_method == "include_dW":
-        fluctuation_h = system.fluctuation_hamiltonian(controls, t=t)
-        dV = dV + -1j * dt * fluctuation_h @ dW
-    return PerturbativeStep(W=dW, V=dV)
-```
-
-第二项 \(H_{\mathrm{fluc}}\frac{\partial W_k}{\partial c_{k,a}}\) 很关键。它表示 fluctuation insertion 本身依赖名义传播子 \(W_k\)，所以当控制改变 \(W_k\) 时，\(V_k\) 也会随之改变。
-
-## 2. Forward Expansion
-
-传播状态按 fluctuation 插入次数展开。记 \(F_k^{(n)}\) 为传播到第 \(k\) 步后、总共插入 \(n\) 次 fluctuation 的状态分量，则到二阶为止：
-
-$$
-F_k^{(0)} = W_k F_{k-1}^{(0)}
-$$
-
-$$
-F_k^{(1)}
-= W_k F_{k-1}^{(1)}
-+ V_k F_{k-1}^{(0)}
-$$
-
-$$
-F_k^{(2)}
-= W_k F_{k-1}^{(2)}
-+ V_k F_{k-1}^{(1)}
-$$
-
-更一般地，对任意阶数 \(n\)：
-
-$$
-F_k^{(n)}
-= W_k F_{k-1}^{(n)}
-+ \mathbf{1}_{n>0} V_k F_{k-1}^{(n-1)}
-$$
-
-直观理解：
-
-- \(n=0\)：没有 fluctuation insertion。
-- \(n=1\)：插入一次 \(V\)。
-- \(n=2\)：插入两次 \(V\)。
-
-对应代码在 [`expansion_evolution.py`](../quantum_control/evolution/expansion_evolution.py)：
-
-```python
-def _forward_states(self, steps, initial_state):
-    states = [ExpansionState({0: np.asarray(initial_state, dtype=complex)})]
-    for order in range(1, self.max_order + 1):
-        states[0].components[order] = np.zeros_like(states[0].components[0])
-
-    for step in steps:
-        previous = states[-1].components
-        components = {}
-        for order in range(self.max_order + 1):
-            propagated = step.W @ previous[order]
-            if order > 0:
-                propagated = propagated + step.V @ previous[order - 1]
-            components[order] = propagated
-        states.append(ExpansionState(components))
-    return states
-```
-
-代码中这些量存放在：
-
-```python
-result.forward[k].components[order]
-```
-
-也就是数学记号里的 \(F_k^{(n)}\)。
-
-## 3. Backward Expansion
-
-为了高效计算每个时间片的梯度，代码还会从 target state 反向传播同样的 expansion 阶数。
-
-记 \(B_k^{(n)}\) 为从第 \(k\) 步之后的未来传播反推回来的第 \(n\) 阶 backward state，则：
-
 $$
-B_k^{(0)}
-= W_{k+1}^{\dagger} B_{k+1}^{(0)}
+H(t;z)=H_{\rm nominal}(t)+\sum_a z_a G_a(t),\qquad
+\mathbb E[z_a]=0,\quad \mathbb E[z_a z_b]=\delta_{ab}.
 $$
 
-$$
-B_k^{(1)}
-= W_{k+1}^{\dagger} B_{k+1}^{(1)}
-+ V_{k+1}^{\dagger} B_{k+1}^{(0)}
-$$
+其中静态源的 $G_a=\sigma_a H_a$，相对控制源的
+$G_a(t_k)=\sigma_a c_i(k)H_{\chi_i}$。标准差已包含在 $G_a$ 中，
+平均时不能再乘一次 $\sigma_a^2$。
 
 $$
-B_k^{(2)}
-= W_{k+1}^{\dagger} B_{k+1}^{(2)}
-+ V_{k+1}^{\dagger} B_{k+1}^{(1)}
+W_k=\exp[-i\Delta t H_{\rm nominal}(c_k)],\qquad
+V_{k,a}=-i\Delta t G_a(c_k)W_k,
+\qquad \delta U_k\approx\sum_a z_a V_{k,a}.
 $$
 
-更一般地：
+对于任意不含噪声的中间传播 $M$，
 
 $$
-B_k^{(n)}
-= W_{k+1}^{\dagger} B_{k+1}^{(n)}
-+ \mathbf{1}_{n>0} V_{k+1}^{\dagger} B_{k+1}^{(n-1)}
+\mathbb E[\delta U_k M\delta U_l]
+=\sum_{a,b}\mathbb E[z_a z_b]V_{k,a}MV_{l,b}
+=\sum_a V_{k,a}MV_{l,a}.
 $$
-
-对应代码在 [`expansion_evolution.py`](../quantum_control/evolution/expansion_evolution.py)：
-
-```python
-def _backward_states(self, steps, target_state):
-    states_by_index = [None] * (len(steps) + 1)
-    final_components = {0: np.asarray(target_state, dtype=complex)}
-    for order in range(1, self.max_order + 1):
-        final_components[order] = np.zeros_like(final_components[0])
-    states_by_index[-1] = ExpansionState(final_components)
-
-    for step_index in range(len(steps) - 1, -1, -1):
-        step = steps[step_index]
-        next_components = states_by_index[step_index + 1].components
-        components = {}
-        for order in range(self.max_order + 1):
-            propagated = step.W.conj().T @ next_components[order]
-            if order > 0:
-                propagated = propagated + step.V.conj().T @ next_components[order - 1]
-            components[order] = propagated
-        states_by_index[step_index] = ExpansionState(components)
-    return states_by_index
-```
-
-这样做的目的很简单：当只改变第 \(k\) 步的控制时，第 \(k\) 步之前的传播和第 \(k\) 步之后的传播都已经缓存好了。梯度计算只需要在第 \(k\) 步做局部导数，然后和 future backward state 收缩。
 
-## 4. 局部导数
+另一侧为伴随插入时同样成立。若先定义 $V_k=\sum_a V_{k,a}$，
+再使用 $V_kMV_l$，就会保留 $a\ne b$ 交叉项；这对应完全相关的
+$\xi_a=\sigma_a z$，不符合本文的独立通道假设。
+一般相关噪声需要显式的协方差 $C_{ab}=\mathbb E[z_a z_b]$，
+当前多通道平均接口不提供该功能。
 
-对某个时间片 \(k\) 和控制通道 \(a\)，只需要计算该时间片的局部 derivative state。记
+代码入口：[单步构造](../quantum_control/steps/perturbative_step.py)。
+`OpenSystem.fluctuation_hamiltonian()` 仍返回算符总和，供单位噪声取值或
+诊断使用；它不是统计平均。单步构造器使用分开的
+`static_fluctuations` 和 `control_fluctuations`。
+控制噪声按控制通道的位置对应，零强度占位项不能随意删除。
+只有旧式聚合哈密顿量接口的自定义系统被解释为一个有效噪声源。
 
-$$
-\delta W_k^{(a)} = \frac{\partial W_k}{\partial c_{k,a}},
-\qquad
-\delta V_k^{(a)} = \frac{\partial V_k}{\partial c_{k,a}}
-$$
-
-到二阶为止：
+## 2. 逐通道前后向递推
 
-$$
-\delta F_{k,a}^{(0)}
-= \delta W_k^{(a)} F_{k-1}^{(0)}
-$$
-
-$$
-\delta F_{k,a}^{(1)}
-= \delta W_k^{(a)} F_{k-1}^{(1)}
-+ \delta V_k^{(a)} F_{k-1}^{(0)}
-$$
+名义态在所有噪声通道间共享：
 
 $$
-\delta F_{k,a}^{(2)}
-= \delta W_k^{(a)} F_{k-1}^{(2)}
-+ \delta V_k^{(a)} F_{k-1}^{(1)}
+F_k=W_kF_{k-1},\qquad F_0=|\psi_0\rangle,
+\qquad B_k=W_{k+1}^\dagger B_{k+1},\quad B_N=|\phi\rangle.
 $$
 
-更一般地：
+每个通道的一次和两次插入为
 
 $$
-\delta F_{k,a}^{(n)}
-= \delta W_k^{(a)} F_{k-1}^{(n)}
-+ \mathbf{1}_{n>0}
-\delta V_k^{(a)} F_{k-1}^{(n-1)}
+SF_{k,a}=W_kSF_{k-1,a}+V_{k,a}F_{k-1},
 $$
-
-对应代码在 [`expansion_differentiator.py`](../quantum_control/differentiators/expansion_differentiator.py)：
-
-```python
-@staticmethod
-def _local_component_derivatives(derivative_step, previous_forward, max_order):
-    derivatives = {}
-    for order in range(max_order + 1):
-        value = derivative_step.W @ previous_forward[order]
-        if order > 0:
-            value = value + derivative_step.V @ previous_forward[order - 1]
-        derivatives[order] = value
-    return derivatives
-```
-
-其中：
-
-- `derivative_step.W` 对应 \(\delta W_k^{(a)}\)。
-- `derivative_step.V` 对应 \(\delta V_k^{(a)}\)。
-- `previous_forward[order]` 对应 \(F_{k-1}^{(n)}\)。
-
-这一步只处理 \(c_{k,a}\) 对当前时间片的影响，不重新传播整条 pulse。
 
-## 5. Amplitude 导数
-
-每个 expansion order 的 fidelity amplitude 定义为：
-
 $$
-A_n = \langle \psi_{\mathrm{target}} \mid F_N^{(n)} \rangle
+DF_{k,a}=W_kDF_{k-1,a}+V_{k,a}SF_{k-1,a}.
 $$
-
-对应代码在 [`expansion_fidelity.py`](../quantum_control/objectives/expansion_fidelity.py)：
 
-```python
-def amplitudes(self, result):
-    target_state = result.backward[-1].components[0] if result.backward else None
-    if target_state is None:
-        target_state = result.metadata.get("target_state")
-    final_components = result.forward[-1].components
-    return {
-        order: np.vdot(target_state, final_components[order])
-        for order in range(min(self.max_order, result.max_order) + 1)
-    }
-```
+边界条件是 $SF_{0,a}=DF_{0,a}=0$。一般 $SF_{1,a}=V_{1,a}F_0\ne0$，
+而 $DF_{1,a}=0$。只存同一通道的两次插入，因为异通道项的平均为零。
 
-局部导数需要和未来的 backward state 做 contraction。若局部导数贡献了 \(r\) 次 fluctuation，未来 backward state 贡献了 \(s\) 次 fluctuation，那么总阶数是：
+相应的后向态满足
 
 $$
-m = r + s
+SB_{k,a}=W_{k+1}^\dagger SB_{k+1,a}+V_{k+1,a}^\dagger B_{k+1},
 $$
 
-因此：
-
 $$
-\frac{\partial A_m}{\partial c_{k,a}}
-=
-\sum_{r+s=m}
-\left\langle
-B_{k+1}^{(s)}
-\middle|
-\delta F_{k,a}^{(r)}
-\right\rangle
+DB_{k,a}=W_{k+1}^\dagger DB_{k+1,a}+V_{k+1,a}^\dagger SB_{k+1,a},
+\qquad SB_{N,a}=DB_{N,a}=0.
 $$
-
-对应代码在 [`expansion_differentiator.py`](../quantum_control/differentiators/expansion_differentiator.py)：
 
-```python
-@staticmethod
-def _derivative_amplitudes(local_derivatives, next_backward, max_order):
-    derivative_amplitudes = {}
-    for final_order in range(max_order + 1):
-        amplitude = 0.0 + 0.0j
-        for local_order in range(final_order + 1):
-            future_order = final_order - local_order
-            amplitude = amplitude + np.vdot(
-                next_backward[future_order],
-                local_derivatives[local_order],
-            )
-        derivative_amplitudes[final_order] = amplitude
-    return derivative_amplitudes
-```
+代码：[展开演化](../quantum_control/evolution/expansion_evolution.py)。
+多源时 `V.shape == (n_noise, d, d)`；`components[0]` 为 `(d,)`，
+`components[1]` 和 `components[2]` 为 `(n_noise, d)`。
+单源或无源时保持原来的矩阵／向量形状；Lindblad 的展开状态仍是向量。
+使用按通道广播的矩阵向量乘法，共享每一步的 `W` 和 `dW`，
+不会为各噪声源重复计算名义矩阵指数。
 
-这里的 `next_backward` 表示第 \(k\) 步之后的 future contraction，也就是 \(B_{k+1}^{(s)}\)，因此刚好可以和第 \(k\) 步产生的 \(\delta F_{k,a}^{(r)}\) 拼起来。
+## 3. 保真度的二阶平均
 
-当 `max_order=2` 时，这里会显式用到 higher-order backward：
+令
 
 $$
-\frac{\partial A_0}{\partial c_{k,a}}
-=
-\left\langle B_{k+1}^{(0)} \middle| \delta F_{k,a}^{(0)} \right\rangle
+A_0=\langle\phi|F_N\rangle,\quad
+A_{1,a}=\langle\phi|SF_{N,a}\rangle,\quad
+A_{2,a}=\langle\phi|DF_{N,a}\rangle.
 $$
 
-$$
-\frac{\partial A_1}{\partial c_{k,a}}
-=
-\left\langle B_{k+1}^{(1)} \middle| \delta F_{k,a}^{(0)} \right\rangle
-+
-\left\langle B_{k+1}^{(0)} \middle| \delta F_{k,a}^{(1)} \right\rangle
-$$
+则当前离散近似给出
 
 $$
-\frac{\partial A_2}{\partial c_{k,a}}
-=
-\left\langle B_{k+1}^{(2)} \middle| \delta F_{k,a}^{(0)} \right\rangle
-+
-\left\langle B_{k+1}^{(1)} \middle| \delta F_{k,a}^{(1)} \right\rangle
-+
-\left\langle B_{k+1}^{(0)} \middle| \delta F_{k,a}^{(2)} \right\rangle
+\overline F\approx |A_0|^2+
+\sum_a\left[|A_{1,a}|^2+2\operatorname{Re}(A_0^*A_{2,a})\right].
 $$
 
-## 6. Objective 导数
+闭系统项只计一次，噪声修正逐通道相加。
+特别地，$\sum_a|A_{1,a}|^2$ **不是** $|\sum_a A_{1,a}|^2$。
+仅丢弃奇数总阶项不能消除两个不同通道各出现一次的二阶项。
 
-当前常用配置是：
+[ExpansionFidelity](../quantum_control/objectives/expansion_fidelity.py)
+返回的 `amplitudes[0]` 为标量，多源时 `amplitudes[1]` 和 `amplitudes[2]`
+分别为通道向量；`contract` 逐元素乘积后对通道求和。
+多源平均仅支持 `max_order <= 2` 且 `drop_odd_average=True`；
+不满足条件时明确报错。更高阶需要混合通道状态及对应高阶矩，
+不能把当前逐通道二阶公式直接推广。
 
-```python
-ExpansionFidelity(max_order=2, drop_odd_average=True)
-```
+`StateAverageProblem` 是在上述噪声平均之后，对输入／目标态对做加权求和。
+它不是噪声平均，也不改变各通道的独立性假设。
 
-它计算的是总阶数不超过 2，并且丢掉奇数总阶项后的 perturbative fidelity：
+## 4. 局部导数与后向收缩
 
-$$
-\mathcal{F}
-\approx
-|A_0|^2
-+ 2\,\mathrm{Re}\left(A_0^* A_2\right)
-+ |A_1|^2
-$$
-
-注意：这一节的 objective contraction 只负责把 \(A_n\) 和 \(\partial A_n/\partial c_{k,a}\) 组合成 \(\partial \mathcal{F}/\partial c_{k,a}\)。higher-order backward 并不是在这里直接出现，而是在上一节计算 \(\partial A_n/\partial c_{k,a}\) 时已经通过 \(B_{k+1}^{(0)}, B_{k+1}^{(1)}, B_{k+1}^{(2)}\) 进入了。
-
-因此梯度为：
-
-$$
-\frac{\partial \mathcal{F}}{\partial c_{k,a}}
-=
-\frac{\partial |A_0|^2}{\partial c_{k,a}}
-+
-\frac{\partial}{\partial c_{k,a}}
-\left[
-2\,\mathrm{Re}\left(A_0^* A_2\right)
-\right]
-+
-\frac{\partial |A_1|^2}{\partial c_{k,a}}
-$$
+对时间片 $k$ 的控制坐标 $c_i(k)$，只在该时间片求局部导数。
+记 $dW_k=\partial W_k/\partial c_i(k)$，则
 
-代码实际使用更统一的双重循环。对每一对 \((\ell, r)\)，若满足保留条件，则加上：
-
 $$
-\frac{\partial}{\partial c_{k,a}}
-\left(A_{\ell}^{*} A_r\right)
-=
-\left(\frac{\partial A_{\ell}}{\partial c_{k,a}}\right)^* A_r
-+ A_{\ell}^{*}
-\frac{\partial A_r}{\partial c_{k,a}}
+dV_{k,a}=-i\Delta t\left[(\partial_{c_i(k)}G_a)W_k+G_a dW_k\right].
 $$
 
-对应代码在 [`expansion_fidelity.py`](../quantum_control/objectives/expansion_fidelity.py)：
+静态源的显式导数为零；属于控制 $j$ 的相对噪声满足
+$\partial_{c_i(k)}G_a=\delta_{ij}\sigma_a H_{\chi_j}$。
+通过 $W_k$ 的导数则影响所有通道。
 
-```python
-def contract(self, amplitudes, derivative_amplitudes=None):
-    value = 0.0 + 0.0j
-    orders = range(self.max_order + 1)
-    for left_order in orders:
-        for right_order in orders:
-            total_order = left_order + right_order
-            if total_order > self.max_order:
-                continue
-            if self.drop_odd_average and total_order % 2 == 1:
-                continue
-            left = amplitudes.get(left_order, 0.0)
-            right = amplitudes.get(right_order, 0.0)
-            if derivative_amplitudes is None:
-                value = value + np.conj(left) * right
-            else:
-                dleft = derivative_amplitudes.get(left_order, 0.0)
-                dright = derivative_amplitudes.get(right_order, 0.0)
-                value = value + np.conj(dleft) * right + np.conj(left) * dright
-    return value
-```
+`dW_method="first_order"` 使用 $dW_k\approx-i\Delta t H_iW_k$；
+`dW_method="frechet"` 使用矩阵指数的 Fréchet 导数。
+`V_method="frechet"` 逐噪声通道计算插入的 Fréchet 导数，
+其控制导数仍使用现有的中心有限差分。
 
-保留条件是：
+局部导数向量为
 
 $$
-\ell + r \le 2
+g_0=dW_k F_{k-1},\qquad
+g_{1,a}=dW_k SF_{k-1,a}+dV_{k,a}F_{k-1},
 $$
-
-并且在 `drop_odd_average=True` 时跳过奇数总阶：
 
 $$
-\ell + r \equiv 1 \pmod{2}
+g_{2,a}=dW_k DF_{k-1,a}+dV_{k,a}SF_{k-1,a}.
 $$
-
-所以最终保留下来的正是：
-
-- \((0,0)\)：\(|A_0|^2\)
-- \((0,2)\) 和 \((2,0)\)：\(2\,\mathrm{Re}(A_0^*A_2)\)
-- \((1,1)\)：\(|A_1|^2\)
-
-梯度主循环在 [`expansion_differentiator.py`](../quantum_control/differentiators/expansion_differentiator.py)：
-
-```python
-for step_index, step in enumerate(result.steps):
-    previous_forward = result.forward[step_index].components
-    next_backward = result.backward[step_index + 1].components
-    controls = pulse.controls_at(step_index)
-    t = step_index * pulse.dt
 
-    for control_index in range(pulse.n_controls):
-        derivative_step = self.step_builder.derivative_step(
-            system,
-            controls,
-            pulse.dt,
-            control_index,
-            step,
-            t=t,
-        )
-        local_derivatives = self._local_component_derivatives(
-            derivative_step,
-            previous_forward,
-            result.max_order,
-        )
-        derivative_amplitudes = self._derivative_amplitudes(
-            local_derivatives,
-            next_backward,
-            result.max_order,
-        )
-        derivative_value = self.objective.contract(
-            amplitudes,
-            derivative_amplitudes=derivative_amplitudes,
-        )
-        gradient[step_index, control_index] = np.real_if_close(derivative_value).real
-```
+用已经缓存的后向态收缩：
 
-## 7. 整体数据流
-
-整个 gradient 计算可以理解成下面这条链：
-
 $$
-c
-\longrightarrow
-\{W_k,V_k\}
-\longrightarrow
-\{F_k^{(n)}\}
-\longrightarrow
-\{B_k^{(n)}\}
-\longrightarrow
-\{\delta W_k^{(a)},\delta V_k^{(a)}\}
-\longrightarrow
-\{\delta F_{k,a}^{(n)}\}
-\longrightarrow
-\left\{
-\frac{\partial A_n}{\partial c_{k,a}}
-\right\}
-\longrightarrow
-\frac{\partial \mathcal{F}}{\partial c_{k,a}}
+dA_0=B_k^\dagger g_0,
 $$
-
-关键点是：对每个参数 \(c_{k,a}\)，不需要重新计算整条 evolution。前面用 `forward[k]` 里的历史状态，后面用 `backward[k + 1]` 里的 future state，中间只替换第 \(k\) 步的局部导数。
 
-## 8. 最容易出问题的地方
-
-### 8.1 \(\delta W\) 默认不是精确 Frechet 导数
-
-默认情况下：
-
 $$
-\delta W_k^{(a)}
-\approx
--i\,\Delta t\,H_a\,W_k
+dA_{1,a}=B_k^\dagger g_{1,a}+SB_{k,a}^\dagger g_0,
 $$
-
-这是一阶近似。如果 Hamiltonian 不对易，或者 \(\Delta t\)、控制幅度比较大，gradient 可能会偏。
 
-可以用下面的配置检查：
-
-```python
-PerturbativeStepBuilder(dW_method="frechet")
-```
-
-如果 Frechet 版本和默认版本差别明显，说明一阶近似可能已经不够准。
-
-### 8.2 优化器看到的符号可能是反的
-
-当前 cost function 的物理含义是：
-
 $$
-\mathrm{cost}
-=
-\mathrm{fidelity}
--
-\mathrm{penalty}
+dA_{2,a}=B_k^\dagger g_{2,a}+SB_{k,a}^\dagger g_{1,a}
++DB_{k,a}^\dagger g_0.
 $$
 
-但优化器内部通常做最小化，所以传给 SciPy 的可能是它的负数：
+这里 $B_k$ 只包含时间片 $k$ 之后的传播。代码时间片下标从 0 开始，
+因此读取 `backward[step_index + 1]`。
+每个乘积保留同一通道索引，最终才求和：
 
 $$
-\mathrm{loss}
-=
--\mathrm{cost}
+\partial_c\overline F=2\operatorname{Re}\left\{
+A_0^*dA_0+\sum_a\left[
+A_{1,a}^*dA_{1,a}+(dA_0)^*A_{2,a}+A_0^*dA_{2,a}
+\right]\right\}.
 $$
 
-因此如果直接看 SciPy 输出里的 \(F\) 或 loss，需要注意符号约定：优化器正在最小化的量，未必就是代码里报告的 fidelity objective。
+代码：[展开梯度](../quantum_control/differentiators/expansion_differentiator.py)。
+闭系统梯度只计一次，`value_and_gradient` 与分别求值／求导使用同一平均规则。
 
-### 8.3 Fluctuation objective 是二阶近似
+## 5. 诊断、验证与近似边界
 
-这里的 fluctuation objective 不是完整的 open gate fidelity，而是二阶 perturbative approximation：
+优化、`noisy_gate_fidelity`、保真度分项日志及误差诊断都使用上述规则。
+报告的 $\kappa_2$ 使用各通道谱范数平方和的平方根，再乘门时间并取控制边界上的最大值；
+它是通道强度估计，不是把可能互相抵消的算符先相加后取范数，也不是实测截断误差。
+逐通道诊断必须保留控制噪声的位置：只开启第二控制噪声时，
+第一控制噪声应保留零强度占位。精确评估保留该位置映射，
+但只对非零噪声源生成 Gauss–Hermite 积分维度。
 
-$$
-\mathcal{F}
-\approx
-|A_0|^2
-+ 2\,\mathrm{Re}\left(A_0^*A_2\right)
-+ |A_1|^2
-$$
+日志的 `first_order_sq` 为 $\sum_a|A_{1,a}|^2$，
+`second_order_cross` 为 $2\operatorname{Re}(A_0^*\sum_a A_{2,a})$。
+为兼容旧 CSV，`a1_real/imag`、`a2_real/imag` 显示通道振幅的总和，
+只作辅助诊断；不能用显示的 `a1` 平方重建 `first_order_sq`。
+`dropped_order1_cross` 是被丢弃的一阶代数项总和，不是平均噪声修正。
 
-如果 fluctuation 很大，或者高阶 fluctuation contribution 不可忽略，那么这个近似本身可能失效。此时 gradient 即使和该二阶 objective 一致，也不一定代表真实 fluctuation fidelity 的梯度。
+回归验证包括：独立的 $X$ 与 $-X$ 噪声不抵消、修正与梯度可加、
+独立源符号翻转不改变平均、多通道有限差分梯度、
+优化／评估／诊断一致，以及第二控制噪声的归属。
 
-## 9. 一句话总结
+本次只修正跨通道统计平均。每个单步传播仍仅保留一次插入，
+没有补齐同一时间片内部的二阶项，因此结果不是步长精确的二阶展开；
+Fréchet 单次插入也不能消除这一缺项。
+比较精确 Lindblad／Gauss–Hermite 结果时，应分别检查步长收敛和噪声强度，
+不能把已有的时间离散误差归为跨通道平均误差，也不应把近似值裁剪到 [0, 1] 隐藏误差。
 
-这个算法的核心是把 fluctuation effect 拆成按插入次数排列的 expansion components。梯度计算时，每个控制参数只影响它所在的单步 \(W_k\) 和 \(V_k\)；其余时间片通过缓存好的 forward/backward expansion 拼接起来。这样既保留了二阶 fluctuation correction，又避免了对每个参数重新做完整传播。
+2026-09-14 之前生成的实验报告属于旧的聚合噪声实现；本次不改写历史结果。
+复现修复前的数值还需要对应旧代码版本，仅复用 YAML 和脉冲不足以保证相同结果。
