@@ -12,45 +12,131 @@
 \newcommand{\dvbar}[1]{\overline{#1}}
 \begin{document}
 \section{Ion-train Raman System}
-In this section, we will discuss an ion-train system with transverse Raman beams. Ion trapped in a linear Paul trap. Three transverse Laser beams are applied to the ion that willing to drive the Raman transition. Red and blue sideband transitions are driven by the Raman beams. Multi-motional modes are considered simutaneously. The cutoff of motional modes is set to be $8$, which gives an error of $10^{-5}$ in the simulation. Since classical computer can not handle the large Hilbert space, the limit of the number of mode could be considered simutaneously is $\approx 9$(equivalent to $29$ qubits). For ion train longer than $9$ ions, we only consider nearest $9$ modes. 
-
+In this section, we will discuss an ion-train system with transverse Raman beams. Ion trapped in a linear Paul trap. Three transverse Laser beams are applied to the ion that willing to drive the Raman transition. Red and blue sideband transitions are driven by the Raman beams. Multi-motional modes are considered simutaneously. The cutoff of motional modes is set to be $8$, which gives an error of $10^{-5}$ in the simulation. Since classical computer can not handle the large Hilbert space, the limit of the number of mode could be considered simutaneously is $\approx 6$(equivalent to $25$ qubits). For ion train longer than $6$ ions, we only consider largest $6$ modes. 
+\newpage
 \begin{notebox}[title=System Receipt]
-\begin{itemize}
-    \item close system:
+\textbf{Hilbert space:} 
 \begin{equation}
-    H_k = \mu_k^{asym}\sigma_z - \mu_k^{sym} a^\dagger_k a_k + \Omega^{sym} \sigma_{\phi}\otimes X_k -\Omega^{asym}\sigma_{\phi+\pi/2}\otimes P_k + \delta_{ac} \sigma_z
+    \mathcal{H} = \text{span}\{\ket{0},\ket{1},\ket{f}\}^{\otimes 2}\otimes \text{span}\{\ket{0},\ket{1},\cdots,\ket{N}\}^{\otimes M}
 \end{equation}
-    \item control channels:
-    \begin{center}
-        \begin{tabular}{|ll|l|}
-            \textbf{Parameter} && \textbf{Range / relation} \\
-            \hline
-            BSB effactive Rabi &$\Omega^{b}$ & \multirow{4}{*}{$[0,400]\,\mathrm{kHz}$} \\
-            RSB effactive Rabi &$\Omega^{r}$ & \\
-            BSB two photon detuning &$\omega^{b}$ & \\
-            RSB two photon detuning &$\omega^{r}$ & \\
-            \hline
-            light 1 Rabi &$g_1$ & $[0,1]\,\mathrm{GHz}$\\
-            \hline
-            laser 1 D1 detuning &$\Delta$ & $[1,60] \,\mathrm{THz}$\\ 
-            \hline
-            light shift &$\delta_{ac}$ & $\delta_{ac}(g_1,\Delta)$
-            \hline
-        \end{tabular}
-    \end{center}
-    $\Delta$ is one-photon detuning of the Raman transition. 
-    \item noise: 
-    \begin{enumerate}
-        \item excited states spontaneous emission back to the ground states
-        \item excited states spontaneous emission leakage to other states 
-        \item motional mode heating $\dot{\bar{n}}_k = 1$phonon/s
-        \item control parameter fluctuation
-    \end{enumerate}
-    noise that is not considered:
-    \begin{enumerate}
-        \item 
-        \item $\cdots$
-    \end{enumerate}
-    \end{itemize}
+\textbf{Target gate:}
+\begin{equation}
+    U_{target} = \exp(-i\frac{\pi}{4}\sigma_x\otimes\sigma_x)
+\end{equation}
+\textbf{Control system:}
+Symmetric-asymmetric decomposition of the Hamiltonian for each mode $k$ and ion $j$:
+\begin{equation}
+    H_k^j = \mu_{asym, k}^j\frac{\sigma_z^j}{2} - \mu_{sym, k}^j a^\dagger_k a_k + \Omega^{j}_{sym} \eta_k^j\sigma^j_{\phi}\otimes X_k -\Omega^{j}_{asym}\eta_k^j\sigma^j_{\phi+\pi/2}\otimes P_k + \delta_{ac}^j\frac{\sigma_z^j}{2} 
+\end{equation}
+For each mode $k$, $\mu_k^b = d-\nu_k+q$, $\mu_k^r = d-\nu_k-q$, $\mu_k^{sym} = (\mu_k^r + \mu_k^b)/2 = d-\nu_k$, $\mu_k^{asym} = (\mu_k^b - \mu_k^r)/2 = q$.
+$\nu_k$ is the frequency of the $k$-th motional mode. $\Omega_{sym} = (\Omega^r + \Omega^b)/2$, $\Omega_{asym} = (\Omega^b - \Omega^r)/2$. $\Omega^b = g_1 g_2/(2\Delta)$, $\Omega^r = g_1 g_3/(2\Delta)$ are the effective Rabi frequencies of the red and blue sideband transitions.
+
+$\sigma_{\phi} = \cos(\phi)\sigma_x + \sin(\phi)\sigma_y$ is the spin operator along the direction of the Raman beams' phase. In our case, we set $\phi = 0$ so the spin operator is $\sigma_x$. $X_k = (a_k + a_k^\dagger)/2$, $P_k = (a_k - a_k^\dagger)/(2i)$ are the quadrature operators of the $k$-th motional mode.
+
+
+\textbf{Control channels(11 channels):}
+
+$\Delta$ is one-photon detuning of the Raman transition.
+$\delta_{ac} = \frac{\omega_0}{4\Delta^2}(g_1^2 + g_2^2 + g_3^2)$ is the differential light shift of the qubit states.
+$\omega_0 = 2\pi \times 12.6$ GHz, $g_2 = 2\Delta\Omega_b/g_1$ and $g_3 = 2\Delta\Omega_r/g_1$ are the Rabi frequencies of the other two Raman beams.
+\begin{center}
+    \begin{tabular}{|lc|l|}
+        \hline
+        \textbf{Parameter} && \textbf{Range / relation} ($\times 2\pi$) \\
+        \hline
+        beams' Rabi &$g_i^{(j)}$ & $[0,1]\,\mathrm{GHz}$\\
+        \hline
+        laser 1 D1 detuning &$\Delta^{(j)}$ & $[1,60] \,\mathrm{THz}$\\
+        asymmetric detuning &$q^{(j)}$ & $[0,200]\,\mathrm{kHz}$ \\
+        common symmetric detuning &$d$ & $3\mathrm{MHz} +[-200,200]\,\mathrm{kHz}$ \\
+        \hline
+        differential light shift &$\delta_{ac}^{(j)}$ & $\delta_{ac}(g_1^{(j)},g_2^{(j)},g_3^{(j)}, \Delta^{(j)})$\\
+        \hline
+    \end{tabular}
+\end{center}
+$i\in \{1,2,3\}, j\in \{1,2\}$ are the index of the Raman beams and the ions. The range of $d$ should cover motional frequency
+
+\textbf{Noise:}
+\begin{enumerate}
+    \item Excited states spontaneous emission to $\{0,1,f\}$ states. (omit ion index for simplicity)
+\begin{equation}
+    L_{sr} = \frac{\sqrt{\mathcal{R}_s\kappa_e}}{2\Delta - i\kappa_e}\ket{s}(g_1(t)\bra{0} + g_2(t)\bra{1});\quad L_{sb} = \frac{\sqrt{\mathcal{R}_s\kappa_e}}{2\Delta - i\kappa_e}\ket{s}(g_3(t)\bra{0} + g_1(t)\bra{1})
+\end{equation}
+$s\in\{0,1,f\}$ is the spontaneous emission channel. $\mathcal{R}_s$ is the branching ratio of the excited state to the state $s$. $\mathcal{R}_0 = 1/3$, $\mathcal{R}_1 = 1/3$, $\mathcal{R}_f = 1 - \mathcal{R}_0 - \mathcal{R}_1$.
+
+$\kappa_e = 2\pi \times 20 \mathrm{MHz}$ is the decay rate of the excited states.
+    \item Motional mode heating $\dot{\bar{n}}_k = 1$ phonon/s
+\begin{equation}
+    L_{h1,k} = \sqrt{\dot{\bar{n}}_k} a_k;\quad L_{h2,k} = \sqrt{\dot{\bar{n}}_k} a_k^\dagger
+\end{equation}
+\end{enumerate}
+
+\textbf{Fluctuation:} 
+asymmetric detuning, D1 detuning and beam's rabi's amplitude fluctuations in the control channels are considered to be fluctuated.
+\[\widetilde g_i^{(j)}=g_i^{(j)}(1+\epsilon_i^{(j)}),\qquad
+\widetilde\Delta^{(j)}=\Delta^{(j)}+\xi_\Delta^{(j)},\qquad
+\widetilde q^{(j)}=q^{(j)}+\xi_q^{(j)}.\]
+All noise and fluctuation channels are independent.
+
+\textbf{Objective:} 16 states average fidelity to the target gate with noise and fluctuation channels. 
 \end{notebox}
+
+
+
+
+\newpage
+Symmetric-asymmetric decomposition of the Hamiltonian for each mode $k$ and ion $j$:
+\begin{equation}
+    H_k^j = \mu_{asym, k}^j\sigma_z^j - \mu_{sym, k}^j a^\dagger_k a_k + \Omega^{j}_{sym} \eta_k^j\sigma^j_{\phi}\otimes X_k -\Omega^{j}_{asym}\eta_k^j\sigma^j_{\phi+\pi/2}\otimes P_k + \frac{\delta_{ac}^j}{2} \sigma_z^j
+\end{equation}
+For each mode $k$, $\mu_k^r = d-\nu_k+q$, $\mu_k^b = d-\nu_k-q$, $\mu_k^{sym} = (\mu_k^r + \mu_k^b)/2 = d-\nu_k$, $\mu_k^{asym} = (\mu_k^r - \mu_k^b)/2 = q$.
+$\nu_k$ is the frequency of the $k$-th motional mode. $\Omega_{sym} = (\Omega^r + \Omega^b)/2$, $\Omega_{asym} = (\Omega^r - \Omega^b)/2$. $\Omega^r = g_1 g_2/(2\Delta)$, $\Omega^b = g_1 g_3/(2\Delta)$ are the effective Rabi frequencies of the red and blue sideband transitions.
+
+$\sigma_{\phi} = \cos(\phi)\sigma_x + \sin(\phi)\sigma_y$ is the spin operator along the direction of the Raman beams' phase. $X_k = (a_k + a_k^\dagger)/2$, $P_k = (a_k - a_k^\dagger)/(2i)$ are the quadrature operators of the $k$-th motional mode.
+
+
+\begin{center}
+    \begin{tabular}{|ll|l|}
+        \hline
+        \textbf{Parameter} && \textbf{Range / relation} \\
+        \hline
+        BSB effective Rabi &$\Omega^{b}$ & \multirow{4}{*}{$[0,400]\,\mathrm{kHz}$} \\
+        RSB effective Rabi &$\Omega^{r}$ & \\
+        BSB two photon detuning &$\omega^{b}$ & \\
+        RSB two photon detuning &$\omega^{r}$ & \\
+        \hline
+        laser 1 Rabi &$g_1$ & $[0,1]\,\mathrm{GHz}$\\
+        \hline
+        laser 1 D1 detuning &$\Delta$ & $[1,60] \,\mathrm{THz}$\\ 
+        \hline
+        light shift &$\delta_{ac}$ & $\delta_{ac}(g_1,\Delta)$\\
+        \hline
+    \end{tabular}
+\end{center}
+
+\subsection{Derivation of the effective spontaneous emission with zero two-photon detuning}
+The hamiltonian at rotating frame w.r.t.
+\begin{equation*}
+    H_0 = \omega_1\ketbra{e} + \omega_0\ketbra{1} 
+\end{equation*}
+before adiabatic elimination of the excited states is
+\begin{equation}
+    H = -\Delta_b\ketbra{e} + \frac{1}{2}(g_1\ketbra{e}{0} + g_2\ketbra{e}{1} + g_1e^{-i\omega_0 t}\ketbra{e}{1} + g_3e^{-i\omega_0 t}\ketbra{e}{0} + h.c.)
+\end{equation}
+Denote the state of system $\ket{\psi(t)} = c_0(t)\ket{0} + c_1(t)\ket{1} + c_e(t)\ket{e}$, the Schrodinger equation gives
+\begin{equation}
+    i \dot c_e = (-\Delta_b - i\frac{\kappa_e}{2})c_e + (g_1 c_0 + g_2 c_1)/2 + (g_1 c_1 + g_3 c_0)e^{-i\omega_0 t}/2
+\end{equation}
+Since we know $c_0$ and $c_1$ are slowly varying, assume $c_e = a(t) + b(t)e^{-i\omega_0 t}$, we have 
+\begin{equation*}
+    c_e = -\frac{g_1 c_0 + g_2 c_1}{2\Delta + i\kappa_e} - \frac{g_1 c_1 + g_3 c_0}{2\Delta - 2\omega_0 + i\kappa_e} e^{-i\omega_0 t}
+\end{equation*}
+If $\omega_0$ is large compare to the frequency of simulation time slice, this two terms are well separated in frequency space. We have the effective lindblad operators for the spontaneous emission from the excited states to states $\{\ket{0}, \ket{1}, \ket{e}\}$.
+\begin{equation}
+    L_{sr} = \frac{\sqrt{\mathcal{R}_s\kappa_e}}{2\Delta - i\kappa_e}\ket{s}(g_1(t)\bra{0} + g_2(t)\bra{1});\quad L_{sb} = \frac{\sqrt{\mathcal{R}_s\kappa_e}}{2\Delta - i\kappa_e}\ket{s}(g_3(t)\bra{0} + g_1(t)\bra{1})
+\end{equation}
+
+
+
+
 \end{document}

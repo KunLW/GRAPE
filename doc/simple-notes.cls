@@ -75,9 +75,9 @@
 % --- Boxed note helpers -------------------------------------------
 \RequirePackage{tcolorbox}
 \tcbuselibrary{skins,breakable}
-\newtcolorbox{keyresult}[1][]{colback=linkblue!4,colframe=linkblue!55,
+\newtcolorbox{keyresult}[1][]{colback=white!0,colframe=linkblue!55,
   boxrule=0.6pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt,#1}
-\newtcolorbox{notebox}[1][]{colback=orange!5!white,colframe=orange!70!black,
+\newtcolorbox{notebox}[1][]{colback=white!0,colframe=orange!70!black,
   boxrule=0.6pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt,
   breakable,title=Note,#1}
 
